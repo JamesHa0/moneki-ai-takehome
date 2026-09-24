@@ -1,0 +1,21 @@
+# ─── 密钥与本地配置（红线：真实 Key 绝不入库）───
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ─── 运行与构建产物 ───
+starter/var/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ─── 前端（若后续引入）───
+node_modules/
+dist/
+
+# ─── 工作底稿与工具目录（不参与交付）───
+.workbuddy/
+PLAN.md
+notes/
