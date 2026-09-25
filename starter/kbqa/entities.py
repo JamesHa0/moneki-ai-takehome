@@ -94,7 +94,7 @@ WRITE_VERBS = (
 )
 DATA_OBJECTS = (
     "数据", "数据库", "记录", "明细", "流水", "订单", "销售", "销量", "表", "行", "字段",
-    "数字", "金额", "营业额", "客单价", "退款", "库存", "sales", "pos", "db",
+    "数字", "金额", "营业额", "客单价", "退款", "库存", "文档", "知识库", "sales", "pos", "db",
 )
 #: 看起来像动词但其实是业务名词的说法，不应触发拒答（“调价通知”“数据质量”）。
 _WRITE_EXCEPTIONS = re.compile(r"(调价|调休|调班|调整期|数据质量|数据来源|口径)")
@@ -108,7 +108,20 @@ _WRITE_WINDOW = 16
 PROBE_WORDS = ("系统提示词", "提示词", "system prompt", "你的指令", "你的规则", "内部提示",
                "表结构", "schema", "数据库结构", "建表语句", "所有表名", "字段列表")
 PROMPT_PROBE = (
-    re.compile(r"(忽略|无视|绕过).{0,8}(规则|指令|设定|限制)"),
+    re.compile(r"(忽略|无视|绕过|忘记|遗忘|抛弃).{0,8}(规则|指令|设定|限制)"),
+)
+
+_QUESTION_MARKERS = re.compile(
+    r"(有没有|是否|吗|呢|多少|几|哪些|哪|什么时候|何时|怎么|如何|是什么)"
+)
+_IMPERATIVE_WRITE = re.compile(
+    r"(帮我把|帮我.{0,12}(删|清|改|更新|替换|回滚|补|加|移除|写入|录入)|请把|请你|麻烦|给我|"
+    r"把.{0,16}(删|清|改|更新|替换|回滚|补|加|移除|写入)|"
+    r"(?:能|可以|可否).{0,8}(删|清|改|更新|替换|回滚|补|加|移除|写入)|"
+    r"执行|运行|调用)"
+)
+_AMOUNT_WRITE = re.compile(
+    r"(?:加|增加|调高|调低).{0,12}\d|(?:\d|几条|几行).{0,8}(?:加|增加)"
 )
 
 FOLLOW_UP = (
@@ -213,9 +226,15 @@ def is_destructive(text: str) -> bool:
     都会命中；“调价通知说了什么”“数据质量怎么样”不会。
     """
     lowered = normalise(text)
+    if is_prompt_probe(text):
+        return False
+    if _QUESTION_MARKERS.search(lowered) and not _IMPERATIVE_WRITE.search(lowered):
+        return False
     if _RUN_SQL.search(lowered):
         return True
     if _SQL_WRITE.search(lowered) and any(obj in lowered for obj in DATA_OBJECTS + ("table", "from")):
+        return True
+    if _AMOUNT_WRITE.search(lowered) and any(obj in lowered for obj in DATA_OBJECTS):
         return True
     for verb in WRITE_VERBS:
         start = 0
