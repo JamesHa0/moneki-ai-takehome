@@ -117,7 +117,8 @@ class Retriever:
             return None
         ends = self._effective_to.get(doc_id)
         # 只有标了“已废止”的才按取代关系挡掉，别的版本照常参与打分。
-        if meta.get("status") == "已废止" and ends and as_of.isoformat() >= ends:
+        state = meta.get("status") or meta.get("state")
+        if state == "已废止" and ends and as_of.isoformat() >= ends:
             return "该版本自 %s 起已被 %s 取代" % (ends, meta.get("superseded_by"))
         starts = meta.get("effective_from")
         if starts and starts > as_of.isoformat() and doc_id in self._in_chain:

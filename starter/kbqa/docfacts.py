@@ -274,7 +274,7 @@ class DocFacts:
         return sentence.strip()
 
     def version_note(self, meta: dict) -> str:
-        status = meta.get("status") or ""
+        status = meta.get("status") or meta.get("state") or ""
         parts = []
         if meta.get("effective_from"):
             parts.append("%s 起生效" % meta["effective_from"])
