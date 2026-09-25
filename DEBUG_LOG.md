@@ -312,6 +312,7 @@ parse_date("2026-02-30") is None
 | `T03` 第二轮 `fact_all` | 分词层 | ⑨ | 检索层排序 |
 | `C02 answer_length` | 尾块层 | ⑥ | 配 Key / 编排层 |
 | `V03 cite_all` | 尾块层 | ⑧ | 检索层 `retriever.py:276` |
+| `T03` 第二轮 `cite_any` | 检索层 | ⑧ | 检索层（修好 ⑧ 后假绿消失） |
 
 同一轮由红变绿 3 个（C02 `fact_all`、T02 第二轮 `answer_length` / `number_flood`）——
 尾块内容确实进了检索；净分 -1 完全来自上面两条噪声。
@@ -330,6 +331,11 @@ parse_date("2026-02-30") is None
   而检索的 top-1 一直是 KB-011（score 20.78）—— 命中顺序一变，doc_id 就被派给别的片段（同句查询里 KB-014#2、KB-060#4 都被标成了 KB-011）。
   **结论：在它修好之前，任何影响检索的改动都会让 citation 类检查点随机跳动 ±1~3 分，
   这类分数不能当信号看。**
+  修好之后（删掉 `ordered` 与那行赋值）：全库 74 个查询逐条核对，doc_id 与 chunk_id
+  不一致的命中 0 条、命中数恒为 5、分数严格降序。
+  但它在公开题库上**一分没涨**（48.00 → 48.00），只让 T03 第二轮 `cite_any` 变红 ——
+  因为错位的 doc_id 一直在给 citation 类检查点"送分"（偶然撞上期望文档）。
+  **它真正的价值是让检索相关的测量第一次可信，而不是涨分。**
 - ⑨ **检索排序**：T03 第二轮期望引用 KB-023，实际把「S02 Makai Poke 店长周报」排到了第一。
 
 ### S03（越权 / 提示词注入）为什么从 3 分变 0 分
@@ -366,7 +372,8 @@ S03 这类"应拒答"题因此全过，而 C06 / H03 这类"应作答"题全挂
 | 层级 | 位置 | 缺陷 | 状态 |
 | --- | --- | --- | --- |
 | 检索层 | `retriever.py:276` | `hit.doc_id = ordered[len(hits)].doc_id`：把每一条命中的文档标识换成排序里另一篇文档的。实测「退款在净营业额里是怎么算的」的 top-5 里 4 条 doc_id 是错的（KB-013#2 → 标成 KB-001、KB-051#2 → 标成 KB-013 …）→ `cite_all` 与 `quotes_verbatim` 必红 | 待修（下一单） |
-| 检索层 | `retriever.py:307` | 先取满 top-k 再按 `excluded` 过滤 → 结果可能不足 5 条 | 待修 |
+| 编排层 | `loader.py:67` / `retriever.py:120` / `docfacts.py:277` | **`status` 与 `state` 键名不一致**：`loader.Document.meta()` 把 `status` 序列化成 **`state`**（loader.py:67），而 `retriever._eligible()`（retriever.py:120）与 `docfacts.py:277` 都读 `meta.get("status")` → 恒为 None。后果：**三篇已废止的文档（KB-002 / KB-010 / KB-012）永远不会被排除**，`_effective_to` 已经正确算出取代日期（2026-05-01 / 07-01 / 06-15），闸门却打不开。契约要求"用当前有效的那一版"，这也是 `version` 类 0/6 与 C06 引用到 KB-002 的直接原因 | **待修（下一单，最高优先）** |
+| 检索层 | `retriever.py:304` | 先取满 top-k 再按 `excluded` 过滤，理论上可能让命中不足 5 条。**实测不咬人**：74 个查询 + 8 个带 store_id / historical / window 的过滤探针，命中恒为 5、无泄漏（`_multiplier()` 已把不合格文档压出 top-k） | 低优先，建议收紧 |
 | 安全 | `entities.py:237` `is_prompt_probe()` | 零调用，越权 / 注入题不会被拒答 | 待修 |
 | 安全 | `entities.py:209` `is_destructive()` | 零调用，删数据请求不会被拒答 | 待修 |
 | 安全 | `sanitize.py` `sanitize()` / `is_instruction_like()` | 零调用，检索到的文档里若含指令句不会被剥离 | 待修 |
