@@ -123,6 +123,11 @@ def clean_rows(rows: Iterable[sqlite3.Row]) -> tuple[list[tuple], CleaningReport
     seen: set[tuple] = set()
     store_ids = getattr(rows, "store_ids", None)
     product_ids = getattr(rows, "product_ids", None)
+    if store_ids is None or product_ids is None:
+        raise ValueError(
+            "clean_rows() 需要外键白名单才能执行规则 4/5；"
+            "请传入 build_clean_db 用的 _SalesRows，不要直接传普通可迭代对象。"
+        )
 
     for row in rows:
         report.raw_rows += 1
