@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from kbqa.cleaning import build_clean_db
+from kbqa.cleaning import build_clean_db, clean_rows
 
 #: 每一行**只违反一条**剔除规则 → 六个计数的归属没有歧义，
 #: 任何正确实现都必然得到同样的数字。
@@ -101,6 +101,12 @@ def cleaned(tmp_path):
     dst = tmp_path / "clean.db"
     report = build_clean_db(_make_source(tmp_path), dst)
     return report, dst
+
+
+def test_clean_rows_requires_foreign_key_context():
+    """直接传普通可迭代对象时，不能静默跳过规则 4/5。"""
+    with pytest.raises(ValueError, match="外键白名单"):
+        clean_rows([])
 
 
 def test_removal_counts(cleaned):
