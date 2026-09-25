@@ -122,6 +122,11 @@ _IMPERATIVE_WRITE = re.compile(
     r"(?:能|可以|可否).{0,8}(删|清|改|更新|替换|回滚|补|加|移除|写入)|"
     r"执行|运行|调用)"
 )
+_HEAD_IMPERATIVE = re.compile(
+    r"^\s*(?:删|清|移除|去掉|更新|替换|回滚|重置|重算|补|加|写入|录入|新增|添加|修改|调整|"
+    r"覆盖|干掉|伪造|编造|导入|drop|delete|truncate|insert|update|alter|create)",
+    re.I,
+)
 _AMOUNT_WRITE = re.compile(
     r"(?:加|增加|调高|调低).{0,12}\d|(?:\d|几条|几行).{0,8}(?:加|增加)"
 )
@@ -230,9 +235,12 @@ def is_destructive(text: str) -> bool:
     lowered = normalise(text)
     if is_prompt_probe(text):
         return False
+    imperative = bool(_IMPERATIVE_WRITE.search(lowered)) or bool(
+        _HEAD_IMPERATIVE.match(lowered)
+    )
     if (
         _QUESTION_PUNCTUATION.search(lowered) or _QUESTION_WORDS.search(lowered)
-    ) and not _IMPERATIVE_WRITE.search(lowered):
+    ) and not imperative:
         return False
     if _RUN_SQL.search(lowered):
         return True
