@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Optional
@@ -24,6 +25,7 @@ from .trace import Trace, TraceStore
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INT_PARAMS = {"top_k", "limit"}
+logger = logging.getLogger(__name__)
 
 
 class Service:
@@ -167,10 +169,13 @@ class Service:
                 },
             )
             return answer
-        except Exception:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+        except Exception as exc:  # noqa: BLE001 - 不管里面出什么事，接口都得给个像样的回答
+            trace.error("answer", exc)
+            logger.exception("Unhandled error while answering trace_id=%s", trace.trace_id)
             return Answer(
                 answer="抱歉，我暂时无法回答。",
                 answer_type="refusal",
+                notes=["未处理异常：%s: %s" % (type(exc).__name__, exc)],
             )
 
     def _run_engine(self, plan, trace: Trace, history: list[dict]) -> Answer:
