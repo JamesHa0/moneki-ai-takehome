@@ -111,8 +111,10 @@ PROMPT_PROBE = (
     re.compile(r"(忽略|无视|绕过|忘记|遗忘|抛弃).{0,8}(规则|指令|设定|限制)"),
 )
 
-_QUESTION_MARKERS = re.compile(
-    r"(有没有|是否|吗|呢|多少|几|哪些|哪|什么时候|何时|怎么|如何|是什么)"
+_QUESTION_PUNCTUATION = re.compile(r"[?？]")
+_QUESTION_WORDS = re.compile(
+    r"(有没有|是否|是不是|吗|呢|多少|多久|几|哪些|哪|"
+    r"什么时候|何时|怎么|如何|是什么|过没有)"
 )
 _IMPERATIVE_WRITE = re.compile(
     r"(帮我把|帮我.{0,12}(删|清|改|更新|替换|回滚|补|加|移除|写入|录入)|请把|请你|麻烦|给我|"
@@ -228,7 +230,9 @@ def is_destructive(text: str) -> bool:
     lowered = normalise(text)
     if is_prompt_probe(text):
         return False
-    if _QUESTION_MARKERS.search(lowered) and not _IMPERATIVE_WRITE.search(lowered):
+    if (
+        _QUESTION_PUNCTUATION.search(lowered) or _QUESTION_WORDS.search(lowered)
+    ) and not _IMPERATIVE_WRITE.search(lowered):
         return False
     if _RUN_SQL.search(lowered):
         return True
