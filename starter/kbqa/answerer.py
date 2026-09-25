@@ -76,7 +76,10 @@ class Answerer(HybridAnswers):
         candidates = self._candidates(plan, result, require_value=True)
         if not candidates:
             candidates = self._candidates(plan, result, require_value=False)
-        candidates.sort(key=lambda item: (round(item["score"], 2), item["effective_from"]))
+        candidates.sort(
+            key=lambda item: (round(item["score"], 2), item["effective_from"]),
+            reverse=True,
+        )
         lines: list[str] = []
         citations: list[dict] = []
         used_terms: set[str] = set()
@@ -311,14 +314,6 @@ class Answerer(HybridAnswers):
         return Answer(answer=text, answer_type="data", data_evidence=evidence)
 
     # -- 纯文档 -----------------------------------------------------------------
-
-    def _context(self, result: SearchResult) -> str:
-        """把命中的那篇文档原样拼进来，答案就在里面，别漏了。"""
-        blocks: list[str] = []
-        for hit in result.hits[:1]:
-            for chunk in self.retriever.index.chunks_of(hit.doc_id):
-                blocks.append(chunk.text)
-        return ("\n".join(blocks) + "\n") if blocks else ""
 
     def _should_refuse(self, plan: Plan, confidence: float, top_score: float) -> Optional[str]:
         """三个信号一起判断“知识库里到底有没有这件事”。"""
