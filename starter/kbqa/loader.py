@@ -6,10 +6,11 @@ import html as html_module
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
-SUPPORTED_SUFFIXES = {".md", ".markdown"}
+SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".html"}
 
 #: 文件名开头的编号就是 doc_id，与文件格式无关（契约 §0）。
 _DOC_ID = re.compile(r"^(KB-\d+)")
@@ -79,9 +80,49 @@ class Document:
 _HTML_TITLE = re.compile(r"<title>(.*?)</title>", re.S | re.I)
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """提取 HTML 可见正文，跳过 script/style，标签本身不进入索引。"""
+
+    _SKIP_TAGS = {"script", "style"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth and data.strip():
+            self.parts.append(data.strip())
+
+    def text(self) -> str:
+        return "\n".join(self.parts)
+
+
+def _html_to_text(text: str) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(text)
+    parser.close()
+    return parser.text()
+
+
 def decode_bytes(raw: bytes, path: Path, warnings: list[str]) -> str:
-    """统一按 UTF-8 读。个别老文件里有怪字符，忽略掉就行，不影响检索。"""
-    return raw.decode("utf-8", errors="ignore")
+    """优先 UTF-8，旧 OA 文件按 GB18030 回退。"""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return raw.decode("gb18030")
+        except UnicodeDecodeError:
+            warnings.append("无法按 UTF-8 / GB18030 解码，已替换非法字符：%s" % path.name)
+            return raw.decode("utf-8", errors="replace")
 
 
 def parse_front_matter(text: str) -> tuple[dict, str]:
@@ -150,6 +191,7 @@ def _effective_from_body(text: str) -> Optional[date]:
 
 
 def _title_from_body(text: str, fallback: str) -> str:
+    fallback_title = ""
     for line in text.splitlines():
         stripped = line.strip().lstrip("#").strip()
         if not stripped or set(stripped) <= set("=-*_ "):
@@ -160,8 +202,9 @@ def _title_from_body(text: str, fallback: str) -> str:
             return stripped.split(":", 1)[1].strip()
         if stripped.startswith("标题：") or stripped.startswith("标题:"):
             return stripped.split("：", 1)[-1].split(":", 1)[-1].strip()
-        return stripped[:80]
-    return fallback
+        if not fallback_title:
+            fallback_title = stripped[:80]
+    return fallback_title or fallback
 
 
 def load_document(path: Path) -> Optional[Document]:
@@ -170,15 +213,17 @@ def load_document(path: Path) -> Optional[Document]:
     raw = path.read_bytes()
     text = decode_bytes(raw, path, warnings)
     suffix = path.suffix.lower()
-    fmt = {".md": "md", ".markdown": "md", ".txt": "txt"}.get(suffix, "html")
+    fmt = {".md": "md", ".markdown": "md", ".txt": "txt", ".html": "html"}.get(
+        suffix, "html"
+    )
 
     meta: dict = {}
     if fmt == "md":
         meta, text = parse_front_matter(text)
     elif fmt == "html":
-        # html 直接按文本入库，标签也就那么几个，BM25 自己会忽略。
         match_title = _HTML_TITLE.search(text)
         html_title = html_module.unescape(match_title.group(1).strip()) if match_title else ""
+        text = _html_to_text(text)
         meta = {"title": html_title.split("-")[0].strip() or html_title}
 
     match = _DOC_ID.match(path.name)
