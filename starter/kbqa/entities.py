@@ -235,9 +235,12 @@ def is_destructive(text: str) -> bool:
     lowered = normalise(text)
     if is_prompt_probe(text):
         return False
-    imperative = bool(_IMPERATIVE_WRITE.search(lowered)) or bool(
-        _HEAD_IMPERATIVE.match(lowered)
-    )
+    head = _HEAD_IMPERATIVE.match(lowered)
+    head_is_imperative = bool(head)
+    # “更新过的记录”是名词化定语，不是命令；不能把“过期/过敏”里的“过”一起豁免。
+    if head and "的" in lowered[head.end() : head.end() + 2]:
+        head_is_imperative = False
+    imperative = bool(_IMPERATIVE_WRITE.search(lowered)) or head_is_imperative
     if (
         _QUESTION_PUNCTUATION.search(lowered) or _QUESTION_WORDS.search(lowered)
     ) and not imperative:
