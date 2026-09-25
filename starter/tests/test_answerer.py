@@ -101,3 +101,38 @@ def test_doc_block_sorts_candidates_by_score_descending():
     _, citations, _ = answerer._doc_block(plan, result)
 
     assert citations[0]["doc_id"] == "KB-HIGH"
+
+
+def test_doc_block_does_not_cut_a_contract_legal_quote():
+    quote = "长" * 399 + "尾"
+    candidate = {
+        "score": 1.0,
+        "raw": 1.0,
+        "doc_id": "KB-LONG",
+        "meta": {"title": "长引用", "effective_from": "2026-01-01"},
+        "effective_from": "2026-01-01",
+        "unit": SimpleNamespace(text=quote),
+        "sentence": quote,
+    }
+    answerer = Answerer.__new__(Answerer)
+    answerer._candidates = lambda plan, result, require_value: [candidate]
+    answerer.facts = SimpleNamespace(
+        cite=lambda doc_id, text: {"doc_id": doc_id, "quote": text},
+        render=lambda doc_id, text: text,
+        version_note=lambda meta: "",
+    )
+    answerer.retriever = SimpleNamespace(index=SimpleNamespace(docs_meta={}))
+    plan = Plan(question="长引用", standalone="长引用", search_query="长引用")
+    result = SearchResult(
+        hits=[],
+        query="长引用",
+        terms=[],
+        expansions=[],
+        filtered=[],
+        coverage=1.0,
+    )
+
+    body, citations, _ = answerer._doc_block(plan, result)
+
+    assert quote in body
+    assert citations[0]["quote"] == quote
