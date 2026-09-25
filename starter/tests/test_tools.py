@@ -110,3 +110,22 @@ def test_zero_amount_rows_are_not_sales(tools):
     assert prices["rows"] == 0
     assert prices["observed_unit_prices"] == {}
     assert prices["latest_price"] is None
+
+
+def test_run_sql_accepts_read_query_and_rejects_write(tools):
+    before = tools.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0]
+
+    result = tools.run_sql(
+        "WITH rows AS (SELECT * FROM sales_clean) SELECT COUNT(*) AS n FROM rows"
+    )
+    assert result["rows"][0]["n"] == before
+
+    rejected = tools.run_sql("DELETE FROM sales_clean")
+    assert "error" in rejected
+    after = tools.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0]
+    assert after == before
+
+
+def test_connection_rejects_direct_writes(tools):
+    with pytest.raises(sqlite3.OperationalError):
+        tools.conn.execute("UPDATE sales_clean SET amount_cents = 0")
