@@ -9,6 +9,7 @@ from typing import Optional
 
 from .entities import wants_historical
 from .index import BM25Index, load_index
+from .sanitize import sanitize
 from .tokenizer import content_tokens, tokenize
 
 ALIAS_WEIGHT = 0.6
@@ -204,15 +205,17 @@ class Retriever:
 
     def _hit(self, position: int, score: float, filtered: list[dict], padded: bool = False) -> Hit:
         chunk = self.index.chunks[position]
+        text, dropped = sanitize(chunk.text)
         return Hit(
             doc_id=chunk.doc_id,
             chunk_id=chunk.chunk_id,
             score=score,
-            text=chunk.text,
+            text=text,
             source_text=chunk.source_text,
             meta=self.index.docs_meta.get(chunk.doc_id, {}),
             kind=chunk.kind,
             table_header=chunk.table_header,
+            dropped_instructions=dropped,
             padded=padded,
         )
 
