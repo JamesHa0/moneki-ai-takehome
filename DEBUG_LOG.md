@@ -25,7 +25,9 @@
 | 5  | 健康接口的 `kb_docs` 数的是目录文件数，不是入库文档数 | 服务层 | `226a5ca` `0d5663d` |
 | 6  | 真实模型实测：回退路径拼整篇文档、数字白名单过窄、工具调用不收敛（**尚未修复**） | 编排层 | — |
 | 7  | `_doc_block()` 挑句的排序方向反了（引用永远落在最低分句子上） | 编排层 | `ba5899d` `96577ca` |
-| 8+ | 见文末「由绿变红的检查点台账」与「待补条目」 |     |                                         |
+| 8  | 一个叫 `open_readonly` 的函数其实是可读可写，`run_sql` 还带 `commit()` | 工具层 | `fec68ee` `67fb30f` |
+| 9  | 宽 `except` 把真实异常吞干净，trace 里没有错误可看 | 服务层 | `f8a75a8` `a406b73` |
+| 10+ | 见文末「由绿变红的检查点台账」与「待补条目」 |     |                                         |
 
 ---
 
@@ -761,6 +763,165 @@ doc 类**走文档路径**的 4 题，引用全部变正确（修复前 2/4）�
 
 ---
 
+## 8. 一个叫 `open_readonly` 的函数其实是可读可写，`run_sql` 还带 `commit()`
+
+**层级**：工具层 · `starter/kbqa/cleaning.py:95` + `starter/kbqa/tools.py:74`
+
+**影响面**：契约 §5 把 `data_evidence.sql` 定为逐题硬上限——
+"只能是一条只读查询（`SELECT` 或 `WITH` 开头），并且确实查了表（有 `FROM`）"，
+超出即判该题不合格。而 `run_sql` 是模型**唯一能传任意 SQL** 的入口。
+
+### 现象
+
+（待补：你是怎么注意到的？建议写两点——函数名与实际行为的反差，以及
+契约里那条硬上限是怎么把你引到这里的。若能附一条自己手写的写操作语句的实测输出更好。）
+
+### 假设
+
+（待补）
+
+### 验证
+
+（待补。这一栏本单有现成素材，`D:/系统缓存/probe_readonly.py` 的 14 组用例 + 连接层 6 组
+可以直接引用，汇总见下面的「修复」一节。）
+
+### 根因
+
+两层防御都缺，而且是**同名不同事**：
+
+1. `cleaning.py:95` 的函数叫 `open_readonly()`，docstring 只写"打开数据库"，
+   实现是 `sqlite3.connect(path.as_posix())` —— 一条**可读可写**的连接，`mode=ro` 根本没设。
+   调用方（`tools.py:45` 的 `DataTools.conn`）完全相信这个名字，于是整个工具层
+   都跑在一条可写连接上。
+2. `tools.py:74` 的 `run_sql()` 把模型给的字符串直接 `self.conn.execute(sql)`，
+   而且每次查询后 `commit()` —— 一个"读工具"里带着提交语句，等于替任意 DML/DDL
+   准备好了落盘动作。契约要的 `sql` 只读约束，在代码里一行都没有。
+
+第 2 条最危险的地方不是它自己，而是**它让第 1 条永远暴露不出来**：
+只要没人写 `DELETE`，一条可写连接看起来和只读连接一模一样。
+
+### 修复
+
+- `cleaning.py`：改成 SQLite 只读 URI —— `sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, ...)`。
+  用 `as_uri()` 而不是手拼 `file:` 前缀，是因为仓库路径含非 ASCII 字符（`D:\Homework\就业\moneki`），
+  手拼容易漏转义。
+- `tools.py`：`_READ_SQL` / `_SQL_FROM` 两个正则，要求以 `SELECT`/`WITH` 开头**且**含 `FROM`，
+  否则返回结构化 `error`；删掉 `commit()`。
+
+**写路径没有被误伤**，这是本单最需要先确认的一点：`build_clean_db()` 写 clean.db 用的是
+另一条独立的 `sqlite3.connect(target)`（`cleaning.py:240`，先 `unlink` 再建），
+只有**读源库**才用 `open_readonly()`。全仓 `sqlite3.connect` 仅三处，`kbqa/` 里除
+`build_clean_db` 外没有任何写操作。
+
+**冷启动专项**（`mode=ro` 最可能翻车的地方，单独测过）：全新 `VAR_DIR`（目录不存在）起服务，
+`service.rebuild(only_if_missing=True)` 先走 `build_clean_db()` 用**写连接**建库，
+之后才交给只读连接 —— 顺序成立。实测 `/api/health` = ok、`kb_docs=35`、
+`valid_sales_rows=18290`，新目录里落出全新的 `clean.db`（1777664 字节，与仓库那份同尺寸）。
+
+**绕过探测结果**（14 组用例）：
+
+| 用例 | 结果 | 拦在哪一层 |
+| --- | --- | --- |
+| `SELECT` / `WITH … SELECT … FROM` / 带结尾分号 / 小写 `select` | 放行 | — |
+| `DELETE` / `UPDATE` / `DROP` / `INSERT` / `PRAGMA` / `ATTACH` / 空串 / 纯注释 | 被拦 | 关键字守卫 |
+| `SELECT …; DROP TABLE …`（多语句） | 被拦 | sqlite3「一次只能执行一条语句」 |
+| `WITH x AS (SELECT 1) DELETE FROM …` | 被拦 | `attempt to write a readonly database` |
+| 连接层直接 `UPDATE` / `DELETE` / `DROP` / `CREATE` | 被拦 | `mode=ro` |
+
+跑完 `sales_clean` 行数 18290 → 18290，文件未被改动。
+
+### 两处如实记下的残留（都不影响当前评分，但评审可能问）
+
+1. **`mode=ro` 挡不住 `ATTACH`**。实测 `ATTACH DATABASE '…/evil.db' AS evil` 在只读连接上
+   **执行成功并建出了那个文件**（随后 `INSERT INTO evil.t` 才因表不存在失败）。
+   即 ATTACH 这一路**只有关键字守卫 + 单语句限制在挡，连接层不参与**。
+   当前不可达：`ATTACH` 不含 `FROM`，守卫直接拒；`run_sql` 是模型唯一能传任意 SQL 的入口，
+   其余方法全是固定语句 + 参数绑定。**若以后放宽守卫（例如放行 `PRAGMA`、或允许不含 `FROM`
+   的 `SELECT`），这一条会立刻变成真洞。** 探针建出的临时库已删除。
+2. **守卫是子串正则，评测方是词法骨架**。`eval/run_eval.py:1294 sql_problems()` 先剥注释、
+   剥字符串再按 token 判（所以 `updated_count` 不算 `update`、`'from'` 不算 `FROM`），
+   我们用的是 `^(SELECT|WITH)\b` + `\bFROM\b` 子串匹配。差异有两个方向：
+   前导注释（`/* q */ SELECT … FROM …`）**我们拒、评测收**；字符串里出现 `FROM`
+   **我们收、评测拒**。前者会让模型的合法查询拿不到证据，后者只会让那题变红
+   （真正执行仍被 `mode=ro` 拦死）。
+   **实测不咬人**：`notes/llm_traffic.jsonl` 里模型真正写出的 SQL 去重只有 3 条
+   （`SELECT * FROM products`、`SELECT doc_id, chunk_id, substr(text,1,2000) AS t FROM kb_docs WHERE doc_id='KB-022'`、
+   `SELECT name FROM sqlite_master WHERE type='table'`），
+   全部以 `SELECT` 开头、全部含 `FROM`、0 条带前导注释 —— 守卫的接受集覆盖 3/3。
+   留在这里是为了将来换模型/改守卫时有个已知边界。
+
+### 回归测试
+
+- `tests/test_tools.py::test_run_sql_accepts_read_query_and_rejects_write`
+  —— `WITH … SELECT … FROM …` 正常执行；`DELETE FROM sales_clean` 返回 error 且行数不变。
+- `tests/test_tools.py::test_connection_rejects_direct_writes`
+  —— 绕过守卫层直接对连接 `UPDATE`，必须抛 `sqlite3.OperationalError`。
+  这条刻意走"绕过 `run_sql`"的路径：只断言守卫层，等于把 `mode=ro` 这一层的存在感抹掉。
+
+---
+
+## 9. 宽 `except` 把真实异常吞干净，排障时手上什么都没有
+
+**层级**：服务层 · `starter/kbqa/service.py:_answer()`
+
+**影响面**：契约 §6 要求 `/api/trace/{trace_id}` "至少要能看到……每一步的耗时，以及出现的错误"。
+第四关的调试面板就是把这个接口可视化——**trace 里没有错误，面板上就没有东西可看**。
+
+### 现象
+
+（待补：建议写"某题答不出来时，trace 的 errors 是空列表、日志里也没有一行"这类观察，
+以及你是怎么确认异常确实发生过、而不是压根没走到那一步的。）
+
+### 假设
+
+（待补）
+
+### 验证
+
+（待补。可引用的素材：注入 `RuntimeError("planner-exploded")` 后，
+修复前 `trace["errors"] == []`、修复后能看到 `type` / `message` / `traceback`。）
+
+### 根因
+
+`service.py` 那个宽 `except Exception:` 分支**连 `as exc` 都没写**，抓到异常后
+直接返回固定的「抱歉，我暂时无法回答。」。于是：
+
+- trace 的 `errors` 恒为空；
+- 日志里一行都没有；
+- 对外行为"看起来是正确的"（HTTP 200 + 合法 refusal），
+  契约对外的要求它全满足 —— 所以这个问题**不会被任何评测检查点发现**，
+  它损害的是调试能力本身。
+
+`Trace.error()` 方法在 `trace.py:36` 早就写好了（记录 `where` / `type` / `message` /
+`traceback(limit=8)`），调用数是 **0**。这和 D1-08 的 `plan(question, history)`
+是同一类问题：**能力已经躺在仓库里，缺的是一个调用点**。
+
+### 修复
+
+三行，不改对外行为：
+
+```python
+except Exception as exc:                                  # 原来是裸 except Exception:
+    trace.error("answer", exc)                            # 真实原因进 trace
+    logger.exception("Unhandled error while answering trace_id=%s", trace.trace_id)
+    return Answer(answer="抱歉，我暂时无法回答。", answer_type="refusal",
+                  notes=["未处理异常：%s: %s" % (type(exc).__name__, exc)])
+```
+
+**`notes` 不会漏给终端用户**：`chat()` 里响应 payload 只取
+`answer / answer_type / citations / data_evidence / trace_id` 五个字段（写死的），
+异常摘要只在 trace 与调试面板可见。
+
+### 回归测试
+
+- `tests/test_api.py::test_chat_records_unhandled_exception_in_trace`
+  —— `monkeypatch` 让 `planner.plan` 抛 `RuntimeError`，断言 HTTP 200、
+  `answer_type == "refusal"`、且 trace 的 `errors` 里有真实类型与消息。
+  **第 3 条是本单的重点**：前两条在修复前就已成立（宽 except 一直能返回像样的 refusal），
+  只断言前两条的话，把 `trace.error(...)` 注释掉测试照样过。
+
+---
+
 ## 由绿变红的检查点台账
 
 每修一层，上一层「靠检索不到 → 短拒答」侥幸通过的检查点就会失效。这不是修坏，
@@ -910,10 +1071,8 @@ S03 这类"应拒答"题因此全过，而 C06 / H03 这类"应作答"题全挂
 | 安全 | `entities.py:237` `is_prompt_probe()` | 零调用，越权 / 注入题不会被拒答（S03） | 待修（D1-05 ②，预估合计 +6 分） |
 | 安全 | `entities.py:209` `is_destructive()` | 零调用，「把 S01 的销售记录全部删掉」不会被拒答（S02） | 待修（同上） |
 | 安全 | `sanitize.py:39` `sanitize()` / `:21` `is_instruction_like()` | 零调用，检索到的文档里若含指令句不会被剥离 | 待修（同上） |
-| 安全 | `tools.py:74` `run_sql()` | 任意 SQL + `commit()`，连接无 `mode=ro` → `DROP TABLE` 真能生效 | 待修（D1-04 子任务 4） |
 | 编排层 | `planner` | C01/C08 是文档题却被当数据题答了全区间汇总；C03「Super Souper 现在周五晚上营业到几点？」被「今天 2026-09-01 无数据」拒答（答案在 KB-062 里）；C04 断供赔偿题被判 clarify | 待修（D1-05 ④） |
 | 编排层 | `planner.py:253` | 「问『多少/多久/几』就是要数字」的兜底会**覆盖 `_choose_kind()` 已经判好的 `kind="doc"`**，把文档题改写成数据题。T03 第二轮就是这么丢掉 KB-023 的（见机制 ⑬）；C03 同理。和上一条同属 planner 误判，**要一起修** | 待修（合并进 D1-05 ④） |
-| 编排层 | `service.py:_answer()` | 宽 `except` 吞掉异常，trace 里没有 traceback，出问题时无从下手 | 待修（D1-04 子任务 5） |
 
 
 ---
