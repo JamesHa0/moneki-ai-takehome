@@ -29,6 +29,8 @@ SALES = [
     ("o22", "2026-06-07",  "S01",  "P01", "1",  "38.00",         "微信"),  # 支付方式不同
     ("o23", "2026/6/8",    "s01 ", "P01", "1",  "¥38.00",        "现金"),  # 规范化后与下一行
     ("o23", "2026-06-08",  "S01",  "P01", "1",  "38.00",         "现金"),  # 七字段完全相同
+    ("o24", "2026-6-9",    "S01",  "P01", "1",  "38.00",         "现金"),  # 连字符不补零
+    ("o25", "6-06-2026",   "S01",  "P01", "1",  "38.00",         "现金"),  # 日在前且不补零
     # ── 规则 1：日期解析不了（4 行）──────────────────────────────────
     ("o5",  "",            "S01",  "P01", "1",  "38.00", "现金"),
     ("o6",  "N/A",         "S01",  "P01", "1",  "38.00", "现金"),
@@ -109,7 +111,7 @@ def test_removal_counts(cleaned):
     assert sum(report.removed.values()) == report.raw_rows - report.kept_rows
     # 辅助自洽：计数之和必须等于 raw − kept
     assert report.kept_rows == len(SALES) - sum(REMOVED_BY_RULE.values())
-    assert report.kept_sales_rows == 9
+    assert report.kept_sales_rows == 11
     assert report.kept_refund_rows == 1
 
 
@@ -149,6 +151,8 @@ def test_recoverable_dirty_values_are_normalised_not_dropped(cleaned):
     assert by_order["o2"]["amount_cents"] == 3800       # ¥38.00
     assert by_order["o3"]["date"] == "2026-06-03"       # DD-MM-YYYY，日在前
     assert by_order["o4"]["amount_cents"] == 3800       # 全角空格 + ¥
+    assert by_order["o24"]["date"] == "2026-06-09"       # YYYY-M-D
+    assert by_order["o25"]["date"] == "2026-06-06"       # D-M-YYYY
 
 
 def test_multiline_order_and_refund_survive(cleaned):
