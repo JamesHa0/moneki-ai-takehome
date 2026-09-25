@@ -24,10 +24,10 @@ VOCAB_SOFT_GATE = 0.45
 RETRIEVAL_SOFT_GATE = 12.0
 #: 问得太泛时的反问阈值：检索连一个像样的命中都没有。
 CLARIFY_SCORE = 8.0
-#: 拼给作答用的资料最长多少字，太长了没必要。
-MAX_CONTEXT_CHARS = 200
 #: 契约 §5：对外答案最长 1200 个字符。
 MAX_ANSWER_CHARS = 1200
+#: 模板答案使用的上下文不能短于对外答案上限，否则会切断合法 quote。
+MAX_CONTEXT_CHARS = MAX_ANSWER_CHARS
 
 
 class Answerer(HybridAnswers):
