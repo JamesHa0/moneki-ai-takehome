@@ -22,7 +22,8 @@
 | 2  | 清洗层未执行规范化、六条剔除和七字段去重  | 口径层 | `52a74e1` `36dd8ac`                     |
 | 3  | 中文分词退化成整句一个 token，BM25 失效（**条目待补**） | 索引层 | `a7dfa7c` `2d6da6a` |
 | 4  | 知识库只收 .md，三份金标文档从未入库（**条目待补**） | 索引层 | `3f637c3` `862e4c8` |
-| 5+ | 见文末「由绿变红的检查点台账」与「待补条目」 |     |                                         |
+| 5  | 健康接口的 `kb_docs` 数的是目录文件数，不是入库文档数 | 服务层 | `226a5ca` `0d5663d` |
+| 6+ | 见文末「由绿变红的检查点台账」与「待补条目」 |     |                                         |
 
 ---
 
@@ -292,6 +293,93 @@ parse_date("2026-02-30") is None
 
 ---
 
+## 5. 健康接口的 `kb_docs` 数的是目录文件数，不是入库文档数
+
+### 现象
+
+`/api/health` 报 `kb_docs: 36`，而题库 N01 的期望值是 **35**。同一时刻：
+
+```
+kb_docs           36
+kb_chunks        131
+valid_sales_rows 18290
+```
+
+`valid_sales_rows` 已经和契约 N01 对上了，只有 `kb_docs` 差 1 —— 而且恰好差 1。
+
+### 假设
+
+1. **猜「loader 漏了一篇文档」** → 排除。三份新格式文档（KB-022 / KB-061 / KB-062）
+   已经在修好加载器之后进了索引，`len(index.docs_meta)` 正是 35。
+2. **猜「知识库里有一篇文档没编号，被 loader 跳过了」** → 部分对，但方向要反过来。
+   知识库目录下确实是 36 个文件：33 篇 `.md` + 2 篇 `.txt` + 1 篇 `.html`，
+   去掉 `README.md` 正好 35 篇。所以是**接口多报了一篇，不是索引少收了一篇**。
+3. **成立**：`kb_docs` 取数方式与「文档」的定义不一致 —— 一个数文件，一个数索引。
+
+### 验证
+
+```bash
+# 目录里到底有多少文件、多少篇文档
+$ find knowledge_base -type f | wc -l
+36
+$ find knowledge_base -type f -name '*.md' ! -name 'README.md' | wc -l
+32                         # 加上 2 篇 .txt + 1 篇 .html = 35 篇入库文档
+
+# 接口报的数
+$ curl -s localhost:8000/api/health | python -c "import json,sys;print(json.load(sys.stdin)['kb_docs'])"
+36                          # 修复前：数文件
+                            # 修复后：35，与 len(index.docs_meta) 一致
+```
+
+**评测侧的独立佐证**（这一条最有说服力）：`eval/tests/test_run_eval.py` 里有一条名为
+`kb_docs_is_the_folder_file_count` 的用例，常量写死 `FOLDER_FILE_COUNT = 36`，
+要求它**必须恰好**让 `expect.kb_docs` 变红；`eval/tests/test_run_eval_public.py`
+里也写着「目录里的文件数不等于文档数——这是正常的，**`kb_docs` 不能改成数文件**」。
+也就是说「数文件」这个行为是评测方明确设卡的，不是我们自己推测的口径。
+
+### 根因
+
+`service.py:70`：
+
+```python
+"kb_docs": sum(1 for path in self.settings.kb_dir.rglob("*") if path.is_file()),
+```
+
+数的是知识库目录里的**文件**个数，而契约 §1 的 `kb_docs` 是**实际入库的文档数**。
+目录里的 `README.md` 是一个"不是文档的文件"（加载器本来就会跳过它，并留一条告警），
+于是这一行比索引多报 1。
+
+问题的本质是**同一件事有两个实现**：哪些文件算文档，由加载器决定（后缀白名单 + 编号规则），
+而 `health()` 在这里自己重新定义了一遍"什么算一个文件"。两处定义迟早会漂移，
+这次漂移出来的正好是 1。
+
+### 修复
+
+```python
+"kb_docs": len(self.index.docs_meta),
+```
+
+索引里有多少篇就报多少篇 —— 与加载器、切块器共用同一个事实来源，
+不需要在接口层重复实现"哪些文件算文档"。`kb_chunks` 本来就已经是 `len(self.index.chunks)`，
+这一改让两个字段口径一致。
+
+### 回归测试
+
+| 测试 | 断言 | 修复前 | 修复后 |
+| --- | --- | --- | --- |
+| `test_health_kb_docs_counts_indexed_documents` | `kb_docs == len(service().index.docs_meta)` | FAILED（`assert 36 == 35`） | PASSED |
+
+断言写成 `kb_docs == len(service().index.docs_meta)` 而**不是硬编码 35** ——
+只要「接口报的数」与「索引里的文档数」这两者一致就通过，所以换掉 `knowledge_base/`
+之后依然成立，符合契约 §8「评审会替换知识库」的前提。
+
+全套：`cd starter && uv run python -m pytest tests -q` → `42 passed` → **`43 passed`**
+
+评测：总分 `44.00 → 45.00`，`health 0/1 → 1/1`（N01 的 `expect.kb_docs` 由红转绿），
+**由绿变红 0 个**，其余 10 个类别一字未变。
+
+---
+
 ## 由绿变红的检查点台账（已定位，未修复）
 
 每修一层，上一层"靠检索不到 → 短拒答"侥幸通过的检查点就会失效。这不是修坏，
@@ -383,23 +471,23 @@ S03 这类"应拒答"题因此全过，而 C06 / H03 这类"应作答"题全挂
 
 ## 待补条目（已知缺陷，尚未成条）
 
+已修复的不再列在这里 —— 见上方「条目索引」与各条目正文。
+
 | 层级 | 位置 | 缺陷 | 状态 |
 | --- | --- | --- | --- |
-| 检索层 | `retriever.py:276` | `hit.doc_id = ordered[len(hits)].doc_id`：把每一条命中的文档标识换成排序里另一篇文档的。实测「退款在净营业额里是怎么算的」的 top-5 里 4 条 doc_id 是错的（KB-013#2 → 标成 KB-001、KB-051#2 → 标成 KB-013 …）→ `cite_all` 与 `quotes_verbatim` 必红 | 待修（下一单） |
-| 编排层 | `loader.py:67` / `retriever.py:120` / `docfacts.py:277` | **`status` 与 `state` 键名不一致**：`loader.Document.meta()` 把 `status` 序列化成 **`state`**（loader.py:67），而 `retriever._eligible()`（retriever.py:120）与 `docfacts.py:277` 都读 `meta.get("status")` → 恒为 None。后果：**三篇已废止的文档（KB-002 / KB-010 / KB-012）永远不会被排除**，`_effective_to` 已经正确算出取代日期（2026-05-01 / 07-01 / 06-15），闸门却打不开。契约要求"用当前有效的那一版"，这也是 `version` 类 0/6 与 C06 引用到 KB-002 的直接原因 | **待修（下一单，最高优先）** |
-| 检索层 | `retriever.py:304` | **先取满 top-k 再按 `excluded` 过滤 → 命中不足 5 条**。版本过滤修好之后实测复现：R01 4 篇、R06 3 篇、R08 4 篇、R09 4 篇（契约 §4 要求恰好 5 条）。改法：把排除下沉到 `retriever.py:243` 的 `allowed`，让被排除文档的片段从一开始就不参与打分 | **待修（最高优先，4 个检查点）** |
-| 安全 | `entities.py:237` `is_prompt_probe()` | 零调用，越权 / 注入题不会被拒答 | 待修 |
-| 安全 | `entities.py:209` `is_destructive()` | 零调用，删数据请求不会被拒答 | 待修 |
-| 安全 | `sanitize.py` `sanitize()` / `is_instruction_like()` | 零调用，检索到的文档里若含指令句不会被剥离 | 待修 |
-| 安全 | `tools.py:74` `run_sql()` | 任意 SQL + `commit()`，连接无 `mode=ro` → `DROP TABLE` 真能生效 | 待修 |
-| 编排层 | `answerer.py:313` `_context()` | mock 路径把整篇文档拼进答案 → 超 `MAX_ANSWER_CHARS = 1200`（配 Key 后走模型作答，此路径不再是主路径） | 待修 |
-| 编排层 | `planner` | C01/C08 是文档题却被当数据题答了全区间汇总；C03「Super Souper 现在周五晚上营业到几点？」被「今天 2026-09-01 无数据」拒答；C04 判成 clarify | 待修 |
+| 检索层 | `retriever.py:304`（改 `:243` 的 `allowed`） | **先取满 top-k 再按 `excluded` 过滤 → 命中不足 5 条**。版本过滤修好之后实测复现：R01 4 篇、R06 3 篇、R08 4 篇、R09 4 篇（契约 §4 要求恰好 5 条） | **待修（最高优先，4 个检查点）** |
+| 编排层 | `answerer.py:313` `_context()` 与 `answerer._doc_block()` | **正文与引用不同源**：正文只取 `hits[0]` 一篇的全文，引用却在全部命中之间跨文档挑句。V03 的正文已是 KB-011（开头 `# 会员储值政策 v2`），citations 却是 `[KB-061, KB-014]` | 待修（与下一行同单） |
 | 编排层 | `answerer.py:28` `MAX_CONTEXT_CHARS = 200` | 引文被截到 200 字（第 129 行用到） | 待修 |
-| 索引层 | `chunker.py:41` | `range(0, len(text) - CHUNK_SIZE, ...)` 丢掉最后一块 | 待修 |
-| 服务层 | `service.py:70` | `kb_docs` 数目录文件数（36）而非入库文档数（35，题库 N01 的期望值） | 待修（一行） |
+| 安全 | `entities.py:237` `is_prompt_probe()` | 零调用，越权 / 注入题不会被拒答（S03） | 待修（预估 +6 分） |
+| 安全 | `entities.py:209` `is_destructive()` | 零调用，删数据请求不会被拒答（S02） | 待修 |
+| 安全 | `sanitize.py:39` `sanitize()` / `:21` `is_instruction_like()` | 零调用，检索到的文档里若含指令句不会被剥离 | 待修 |
+| 安全 | `tools.py:74` `run_sql()` | 任意 SQL + `commit()`，连接无 `mode=ro` → `DROP TABLE` 真能生效 | 待修 |
+| 编排层 | `answerer.py:313` `_context()` | mock 路径把整篇文档原文拼进答案 → 超 `MAX_ANSWER_CHARS = 1200`（配 Key 走 live 后不再是主路径） | 配 Key 后消失 |
+| 编排层 | `planner` | C01/C08 是文档题却被当数据题答了全区间汇总；C03「Super Souper 现在周五晚上营业到几点？」被「今天 2026-09-01 无数据」拒答；C04 判成 clarify | 待修 |
 
-已修复、条目已写：第 1、2 条。
-已修复、**条目待补**：第 3 条（分词层 `a7dfa7c` + `2d6da6a`）、第 4 条（加载层 `3f637c3` + `862e4c8`）
-—— 两条的根因 / 修复 / 回归测试都已写在对应 commit 正文里，照同样六栏格式补成小节即可。
+已修复、**条目待补**：第 3 条（分词层 `a7dfa7c` + `2d6da6a` + `74aa491`）、
+第 4 条（加载层 `3f637c3` + `862e4c8` + `cbdb289`）
+—— 两条的根因 / 修复 / 回归测试都写在对应 commit 正文里，照同样六栏格式补成小节即可。
+
 
 ---
