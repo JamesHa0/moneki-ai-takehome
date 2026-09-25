@@ -313,6 +313,10 @@ parse_date("2026-02-30") is None
 | `C02 answer_length` | 尾块层 | ⑥ | 配 Key / 编排层 |
 | `V03 cite_all` | 尾块层 | ⑧ | 检索层 `retriever.py:276` |
 | `T03` 第二轮 `cite_any` | 检索层 | ⑧ | 检索层（修好 ⑧ 后假绿消失） |
+| `R01 results_count` | 版本层 | ⑩ | 检索层 `retriever.py:304` |
+| `R06 results_count` | 版本层 | ⑩ | 检索层 `retriever.py:304` |
+| `R08 results_count` | 版本层 | ⑩ | 检索层 `retriever.py:304` |
+| `R09 results_count` | 版本层 | ⑩ | 检索层 `retriever.py:304` |
 
 同一轮由红变绿 3 个（C02 `fact_all`、T02 第二轮 `answer_length` / `number_flood`）——
 尾块内容确实进了检索；净分 -1 完全来自上面两条噪声。
@@ -337,6 +341,16 @@ parse_date("2026-02-30") is None
   因为错位的 doc_id 一直在给 citation 类检查点"送分"（偶然撞上期望文档）。
   **它真正的价值是让检索相关的测量第一次可信，而不是涨分。**
 - ⑨ **检索排序**：T03 第二轮期望引用 KB-023，实际把「S02 Makai Poke 店长周报」排到了第一。
+- ⑩ **后置过滤发生在取满 top-k 之后**。`retriever.py:304` 的
+  `hits = [hit for hit in hits if hit.doc_id not in excluded]` 会把已经截断到 5 条的列表
+  再删一次：R01 返回 4 篇、R06 返回 3 篇、R08 返回 4 篇、R09 返回 4 篇，而契约 §4 要求恰好 5 条。
+  该动手的地方是同文件 `retriever.py:243` 的 `allowed` —— 让被排除文档的片段一开始就不参与打分。
+
+  > **这一条附带一个方法论教训。** 版本过滤修好之前，`filtered` 恒为空，那行后置过滤
+  > 一次都没真的删过东西 —— 于是我在 09-25 17:0x 前实测「74 个查询命中恒为 5」，
+  > 判断它「不咬人、降级」。**那个结论是错的：我是在另一个缺陷的掩盖效果下做的测量。**
+  > 教训：当一个缺陷的症状依赖另一个子系统的输出时，不要用「实测没问题」下结论 ——
+  > 要先确认那条通路真的被执行过（这次该看的不是命中数，而是 `filtered` 是否非空）。
 
 ### S03（越权 / 提示词注入）为什么从 3 分变 0 分
 
@@ -373,7 +387,7 @@ S03 这类"应拒答"题因此全过，而 C06 / H03 这类"应作答"题全挂
 | --- | --- | --- | --- |
 | 检索层 | `retriever.py:276` | `hit.doc_id = ordered[len(hits)].doc_id`：把每一条命中的文档标识换成排序里另一篇文档的。实测「退款在净营业额里是怎么算的」的 top-5 里 4 条 doc_id 是错的（KB-013#2 → 标成 KB-001、KB-051#2 → 标成 KB-013 …）→ `cite_all` 与 `quotes_verbatim` 必红 | 待修（下一单） |
 | 编排层 | `loader.py:67` / `retriever.py:120` / `docfacts.py:277` | **`status` 与 `state` 键名不一致**：`loader.Document.meta()` 把 `status` 序列化成 **`state`**（loader.py:67），而 `retriever._eligible()`（retriever.py:120）与 `docfacts.py:277` 都读 `meta.get("status")` → 恒为 None。后果：**三篇已废止的文档（KB-002 / KB-010 / KB-012）永远不会被排除**，`_effective_to` 已经正确算出取代日期（2026-05-01 / 07-01 / 06-15），闸门却打不开。契约要求"用当前有效的那一版"，这也是 `version` 类 0/6 与 C06 引用到 KB-002 的直接原因 | **待修（下一单，最高优先）** |
-| 检索层 | `retriever.py:304` | 先取满 top-k 再按 `excluded` 过滤，理论上可能让命中不足 5 条。**实测不咬人**：74 个查询 + 8 个带 store_id / historical / window 的过滤探针，命中恒为 5、无泄漏（`_multiplier()` 已把不合格文档压出 top-k） | 低优先，建议收紧 |
+| 检索层 | `retriever.py:304` | **先取满 top-k 再按 `excluded` 过滤 → 命中不足 5 条**。版本过滤修好之后实测复现：R01 4 篇、R06 3 篇、R08 4 篇、R09 4 篇（契约 §4 要求恰好 5 条）。改法：把排除下沉到 `retriever.py:243` 的 `allowed`，让被排除文档的片段从一开始就不参与打分 | **待修（最高优先，4 个检查点）** |
 | 安全 | `entities.py:237` `is_prompt_probe()` | 零调用，越权 / 注入题不会被拒答 | 待修 |
 | 安全 | `entities.py:209` `is_destructive()` | 零调用，删数据请求不会被拒答 | 待修 |
 | 安全 | `sanitize.py` `sanitize()` / `is_instruction_like()` | 零调用，检索到的文档里若含指令句不会被剥离 | 待修 |
