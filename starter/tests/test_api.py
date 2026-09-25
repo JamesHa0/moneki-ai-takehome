@@ -13,6 +13,14 @@ def test_health_ok(client):
     assert body["llm_mode"] == "mock"
 
 
+def test_health_kb_docs_counts_indexed_documents(client):
+    from kbqa import server
+
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["kb_docs"] == len(server.service().index.docs_meta)
+
+
 def test_metrics_summary_ok(client):
     response = client.get(
         "/api/metrics/summary", params={"start": "2026-06-01", "end": "2026-06-30"}
