@@ -15,9 +15,18 @@ from .toolspec import TOOLS
 
 MAX_TOOL_ROUNDS = 4
 MAX_BAD_ARGS = 2
+MAX_REPEATED_TOOL_CALLS = 2
 _DOC_MARK = re.compile(r"[\[【]\s*(KB-\d+)\s*[\]】]")
 _NUMBER = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
-_DATE_LIKE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATE_PATTERNS = (
+    re.compile(r"(?<!\d)\d{4}[-/]\d{1,2}[-/]\d{1,2}(?!\d)"),
+    re.compile(r"(?<!\d)\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"),
+    re.compile(r"(?<!\d)\d{1,2}\s*月\s*\d{1,2}\s*日"),
+)
+_CLOSE_OUT_PROMPT = (
+    "工具调用已经停止。请不要再调用工具，直接基于已收到的工具结果作答；"
+    "没有依据的内容不要编造。"
+)
 
 SYSTEM_PROMPT = """你是一家连锁餐饮公司的经营分析助手，服务对象是运营同事。
 今天固定是 {today}，所有“现在/最近/目前”都以这一天为准。
@@ -58,8 +67,10 @@ class LiveEngine:
         evidence: list[dict] = []
         retrieved: dict[str, list] = {}
         bad_args = 0
+        last_tool_key = None
+        repeated_calls = 0
 
-        for round_index in range(MAX_TOOL_ROUNDS + 1):
+        for round_index in range(MAX_TOOL_ROUNDS):
             remaining = deadline - time.perf_counter()
             if remaining < 10:
                 raise LLMError("budget", "整体耗时接近 /api/chat 的时限，已停止调用模型")
@@ -71,6 +82,7 @@ class LiveEngine:
             # D8：assistant 消息整条追加，含 reasoning_content，否则下一轮 400。
             messages.append(reply.message)
             round_bad = 0
+            repeated = False
             for call in reply.tool_calls:
                 name = (call.get("function") or {}).get("name") or ""
                 raw = (call.get("function") or {}).get("arguments") or "{}"
@@ -87,6 +99,37 @@ class LiveEngine:
                             "tool_call_id": call.get("id"),
                             "content": json.dumps(
                                 {"error": "参数不是合法 JSON：%s，请重新给出完整的 JSON 参数" % exc},
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+                    continue
+                tool_key = (
+                    name,
+                    json.dumps(
+                        params,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+                if tool_key == last_tool_key:
+                    repeated_calls += 1
+                else:
+                    last_tool_key = tool_key
+                    repeated_calls = 1
+                if repeated_calls >= MAX_REPEATED_TOOL_CALLS:
+                    repeated = True
+                    trace.step(
+                        "tool_loop_repeat",
+                        {"tool": name, "params": params, "count": repeated_calls},
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "content": json.dumps(
+                                {"error": "检测到连续重复的工具调用，已停止继续执行，请直接收口作答"},
                                 ensure_ascii=False,
                             ),
                         }
@@ -113,7 +156,61 @@ class LiveEngine:
                         "bad_tool_args",
                         "模型连续 %d 轮给出无法解析的工具参数" % bad_args,
                     )
-        raise LLMError("tool_loop", "工具调用超过 %d 轮仍未给出回答" % MAX_TOOL_ROUNDS)
+            if repeated:
+                return self._close_out(
+                    plan,
+                    messages,
+                    evidence,
+                    retrieved,
+                    trace,
+                    reason="repeated_call",
+                    budget=deadline - time.perf_counter(),
+                )
+        trace.step("tool_loop_limit", {"rounds": MAX_TOOL_ROUNDS})
+        return self._close_out(
+            plan,
+            messages,
+            evidence,
+            retrieved,
+            trace,
+            reason="round_limit",
+            budget=deadline - time.perf_counter(),
+        )
+
+    def _close_out(
+        self,
+        plan: Plan,
+        messages: list[dict],
+        evidence: list[dict],
+        retrieved: dict,
+        trace,
+        reason: str,
+        budget: float,
+    ) -> Answer:
+        """工具循环停止后，禁用工具再问一次，拿已有结果收口。"""
+        trace.step("tool_loop_close_out", {"reason": reason})
+        if budget < 5:
+            return self._tool_loop_fallback(plan, trace, "整体耗时接近时限")
+        messages.append({"role": "user", "content": _CLOSE_OUT_PROMPT})
+        try:
+            reply = self.client.chat_with_retry(
+                messages, None, budget=budget, on_call=trace.llm
+            )
+        except LLMError as exc:
+            trace.step(
+                "tool_loop_close_out_failed",
+                {"kind": exc.kind, "detail": exc.detail},
+            )
+            return self._tool_loop_fallback(plan, trace, "收口请求失败：%s" % exc.detail)
+        if reply.tool_calls or not reply.content.strip():
+            trace.step("tool_loop_close_out_failed", {"kind": "invalid_close_out"})
+            return self._tool_loop_fallback(plan, trace, "收口回答为空或仍在调用工具")
+        return self._finalise(plan, reply.content, evidence, retrieved, trace)
+
+    def _tool_loop_fallback(self, plan: Plan, trace, reason: str) -> Answer:
+        fallback = self.answerer.answer(plan, trace)
+        fallback.notes.append("工具调用没有收敛，已退回按工具结果渲染的模板回答：%s" % reason)
+        return fallback
 
     # -- 组装 -------------------------------------------------------------------
 
@@ -198,8 +295,11 @@ class LiveEngine:
 
 
 def _numbers_in(text: str) -> list[float]:
+    cleaned = text or ""
+    for pattern in _DATE_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
     values = []
-    for match in _NUMBER.finditer(_DATE_LIKE.sub(lambda m: m.group(0).replace("-", " "), text or "")):
+    for match in _NUMBER.finditer(cleaned):
         try:
             values.append(float(match.group(0).replace(",", "")))
         except ValueError:
