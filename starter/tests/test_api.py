@@ -133,3 +133,28 @@ def test_chat_follow_up_does_not_cross_session(client):
 
     assert follow_up.status_code == 200
     assert follow_up.json()["answer_type"] == "clarify"
+
+
+def test_chat_records_unhandled_exception_in_trace(client, monkeypatch):
+    from kbqa import server
+
+    active_service = server.service()
+
+    def fail_plan(*args, **kwargs):
+        raise RuntimeError("planner-exploded")
+
+    monkeypatch.setattr(active_service.planner, "plan", fail_plan)
+    response = client.post(
+        "/api/chat",
+        json={"session_id": "trace-error", "question": "触发内部异常"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_type"] == "refusal"
+
+    trace = client.get("/api/trace/%s" % body["trace_id"]).json()
+    assert any(
+        item["type"] == "RuntimeError" and "planner-exploded" in item["message"]
+        for item in trace["errors"]
+    )
