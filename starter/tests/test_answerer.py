@@ -56,3 +56,48 @@ def test_doc_fallback_does_not_append_full_document():
     assert answer.answer_type == "doc"
     assert long_text not in answer.answer
     assert len(answer.answer) <= MAX_ANSWER_CHARS
+
+
+def test_doc_block_sorts_candidates_by_score_descending():
+    low = {
+        "score": 0.1,
+        "raw": 0.1,
+        "doc_id": "KB-LOW",
+        "meta": {"title": "低分文档", "effective_from": "2026-01-01"},
+        "effective_from": "2026-01-01",
+        "unit": SimpleNamespace(text="低分候选"),
+        "sentence": "低分候选",
+    }
+    high = {
+        "score": 0.9,
+        "raw": 0.9,
+        "doc_id": "KB-HIGH",
+        "meta": {"title": "高分文档", "effective_from": "2026-01-01"},
+        "effective_from": "2026-01-01",
+        "unit": SimpleNamespace(text="高分候选"),
+        "sentence": "高分候选",
+    }
+    answerer = Answerer.__new__(Answerer)
+    answerer._candidates = lambda plan, result, require_value: [low, high]
+    answerer.facts = SimpleNamespace(
+        cite=lambda doc_id, text: {"doc_id": doc_id, "quote": text},
+        render=lambda doc_id, text: text,
+        version_note=lambda meta: "",
+        extend_to_cause=lambda unit: unit,
+    )
+    answerer.retriever = SimpleNamespace(
+        index=SimpleNamespace(docs_meta={})
+    )
+    plan = Plan(question="测试问题", standalone="测试问题", search_query="测试问题")
+    result = SearchResult(
+        hits=[],
+        query="测试问题",
+        terms=[],
+        expansions=[],
+        filtered=[],
+        coverage=1.0,
+    )
+
+    _, citations, _ = answerer._doc_block(plan, result)
+
+    assert citations[0]["doc_id"] == "KB-HIGH"
