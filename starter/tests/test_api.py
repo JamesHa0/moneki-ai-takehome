@@ -94,3 +94,42 @@ def test_chat_trace_id(client):
 
 def test_trace_unknown(client):
     assert client.get("/api/trace/nope").status_code == 404
+
+
+def test_chat_follow_up_uses_same_session_history(client):
+    session_id = "follow-up-with-history"
+    first = client.post(
+        "/api/chat",
+        json={"session_id": session_id, "question": "6 月的净营业额是多少？"},
+    )
+    assert first.status_code == 200
+    assert first.json()["answer_type"] in ("data", "hybrid")
+
+    follow_up = client.post(
+        "/api/chat",
+        json={"session_id": session_id, "question": "那 7 月呢？"},
+    )
+    assert follow_up.status_code == 200
+    body = follow_up.json()
+    assert body["answer_type"] in ("data", "hybrid")
+    assert any(
+        item.get("params", {}).get("start") == "2026-07-01"
+        for item in body["data_evidence"]
+    )
+
+
+def test_chat_follow_up_does_not_cross_session(client):
+    first_session = "follow-up-source"
+    other_session = "follow-up-other"
+    client.post(
+        "/api/chat",
+        json={"session_id": first_session, "question": "6 月的净营业额是多少？"},
+    )
+
+    follow_up = client.post(
+        "/api/chat",
+        json={"session_id": other_session, "question": "那 7 月呢？"},
+    )
+
+    assert follow_up.status_code == 200
+    assert follow_up.json()["answer_type"] == "clarify"
