@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from datetime import date, timedelta
@@ -12,6 +13,8 @@ from typing import Any, Optional
 from .cleaning import open_readonly
 
 METRIC_FIELDS = ("net_revenue", "refund_amount", "orders", "aov", "qty")
+_READ_SQL = re.compile(r"^(?:SELECT|WITH)\b", re.I)
+_SQL_FROM = re.compile(r"\bFROM\b", re.I)
 
 
 def yuan(cents: int) -> float:
@@ -72,11 +75,13 @@ class DataTools:
         return int(self.conn.execute("SELECT COUNT(*) FROM sales_clean").fetchone()[0])
 
     def run_sql(self, sql: str) -> dict:
-        """执行一条 SQL。工具覆盖不到的查法，让模型自己写。"""
-        cursor = self.conn.execute(sql)
+        """执行一条只读 SQL；工具覆盖不到的查法，让模型自己写。"""
+        text = (sql or "").strip().rstrip(";").strip()
+        if not _READ_SQL.match(text) or not _SQL_FROM.search(text):
+            return {"error": "只允许执行以 SELECT 或 WITH 开头且包含 FROM 的只读查询"}
+        cursor = self.conn.execute(text)
         rows = [dict(row) for row in cursor.fetchall()] if cursor.description else []
-        self.conn.commit()
-        return {"sql": sql, "rows": rows[:50], "row_count": len(rows)}
+        return {"sql": text, "rows": rows[:50], "row_count": len(rows)}
 
     def stores(self) -> list[dict]:
         return [dict(r) for r in self.conn.execute("SELECT * FROM stores ORDER BY store_id")]

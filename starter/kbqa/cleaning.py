@@ -93,8 +93,12 @@ class CleaningReport:
 
 
 def open_readonly(path: Path) -> sqlite3.Connection:
-    """打开数据库。"""
-    conn = sqlite3.connect(path.as_posix(), check_same_thread=False)
+    """按 SQLite 只读 URI 打开数据库。"""
+    conn = sqlite3.connect(
+        path.resolve().as_uri() + "?mode=ro",
+        uri=True,
+        check_same_thread=False,
+    )
     conn.row_factory = sqlite3.Row
     return conn
 
