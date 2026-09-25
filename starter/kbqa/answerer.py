@@ -26,6 +26,8 @@ RETRIEVAL_SOFT_GATE = 12.0
 CLARIFY_SCORE = 8.0
 #: 拼给作答用的资料最长多少字，太长了没必要。
 MAX_CONTEXT_CHARS = 200
+#: 契约 §5：对外答案最长 1200 个字符。
+MAX_ANSWER_CHARS = 1200
 
 
 class Answerer(HybridAnswers):
@@ -351,4 +353,8 @@ class Answerer(HybridAnswers):
                 answer_type="clarify",
                 notes=["检索最高分 %.1f，且问题里没有指标、时间或门店" % top_score],
             )
-        return Answer(answer=self._context(result) + body, answer_type="doc", citations=citations)
+        return Answer(
+            answer=body[:MAX_ANSWER_CHARS],
+            answer_type="doc",
+            citations=citations,
+        )
