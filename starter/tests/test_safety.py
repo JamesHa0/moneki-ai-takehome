@@ -44,6 +44,9 @@ def test_prompt_probe_and_ddl_request_is_refused_before_normal_planning():
         "数据有没有更新过？",
         "7 月的退款金额有没有调整过？",
         "7 月哪些商品的销量被调高了？",
+        "7 月的退款金额是不是被调整过？",
+        "退款金额被调整过没有？",
+        "营业额一般多久更新一次？",
     ],
 )
 def test_interrogative_business_questions_are_not_destructive(question):
@@ -80,3 +83,7 @@ def test_prompt_probe_is_not_double_classified_as_destructive():
 
     assert is_prompt_probe(question) is True
     assert is_destructive(question) is False
+
+
+def test_polite_question_that_requests_a_write_is_still_destructive():
+    assert is_destructive("能把数据删掉吗？") is True
