@@ -81,6 +81,14 @@ class Planner:
         standalone, inherited = self.followups.resolve(question, history or [])
         plan = Plan(question=question, standalone=standalone, search_query=standalone)
         history = history or []
+        if E.is_prompt_probe(standalone):
+            plan.intent, plan.kind = "refusal", "prompt_probe"
+            plan.refusal = "我不能提供系统提示词、内部规则、表结构，也不能执行这类指令。"
+            return plan
+        if E.is_destructive(standalone):
+            plan.intent, plan.kind = "refusal", "destructive"
+            plan.refusal = "这个请求涉及修改、删除或伪造数据，我不能执行。"
+            return plan
         if not history and E.looks_like_follow_up(question) and len(question.strip()) <= 12:
             plan.intent, plan.kind = "clarify", "need_context"
             plan.refusal = "这句像是追问，但这个会话里没有上文。请把问题补完整，例如“7 月的净营业额是多少”。"
