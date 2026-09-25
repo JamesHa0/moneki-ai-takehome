@@ -238,7 +238,11 @@ class Retriever:
             if reason:
                 excluded.add(doc_id)
                 filtered.append({"doc_id": doc_id, "reason": reason})
-        allowed = set(range(len(self.index.chunks)))
+        allowed = {
+            position
+            for position, chunk in enumerate(self.index.chunks)
+            if chunk.doc_id not in excluded
+        }
 
         scores = self.index.score_terms(self._weights(query), allowed)
         concepts, expansions = self._concept_scores(query, allowed)
@@ -301,9 +305,6 @@ class Retriever:
             # 契约 §4 还要求“按相关性从高到低”：补齐之后整体再排一次。
             # 每篇文档只占一格是挑片段的规则，不是排序的规则。
             hits.sort(key=lambda hit: -hit.score)
-        # 取够 top-k 之后，再把过滤掉的那些版本去掉。
-        hits = [hit for hit in hits if hit.doc_id not in excluded]
-
         return SearchResult(
             hits=hits,
             query=query,
