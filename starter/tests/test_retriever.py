@@ -34,3 +34,42 @@ def test_hit_doc_id_matches_chunk_id_prefix():
     assert {hit.doc_id for hit in result.hits} == {"KB-001", "KB-002"}
     for hit in result.hits:
         assert hit.doc_id == hit.chunk_id.split("#", 1)[0]
+
+
+def test_metadata_filter_happens_before_top_k():
+    chunks = [
+        Chunk("KB-OLD", "KB-OLD#1", "alpha alpha alpha alpha alpha", "alpha", "旧版"),
+        Chunk("KB-NEW", "KB-NEW#1", "alpha", "alpha", "现行版"),
+        Chunk("KB-OTHER", "KB-OTHER#1", "alpha", "alpha", "其他"),
+    ]
+    index = BM25Index(
+        chunks=chunks,
+        docs_meta={
+            "KB-OLD": {
+                "title": "旧版",
+                "status": "已废止",
+                "effective_from": "2025-01-01",
+                "superseded_by": "KB-NEW",
+            },
+            "KB-NEW": {
+                "title": "现行版",
+                "status": "现行",
+                "effective_from": "2026-05-01",
+            },
+            "KB-OTHER": {"title": "其他", "status": "现行"},
+        },
+        aliases=AliasTable(),
+        key="test",
+        texts={
+            "KB-OLD": "alpha alpha alpha alpha alpha",
+            "KB-NEW": "alpha",
+            "KB-OTHER": "alpha",
+        },
+    )
+    retriever = Retriever(index, date(2026, 9, 1))
+
+    result = ORIGINAL_SEARCH(retriever, "alpha", top_k=2)
+
+    assert any(item["doc_id"] == "KB-OLD" for item in result.filtered)
+    assert len(result.hits) == 2
+    assert {hit.doc_id for hit in result.hits} == {"KB-NEW", "KB-OTHER"}
