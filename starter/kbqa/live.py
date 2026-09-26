@@ -155,7 +155,12 @@ class LiveEngine:
                         started=started,
                     )
                 else:
-                    trace.step("tool", {"tool": name, "params": params}, started=started)
+                    detail = {"tool": name, "params": params}
+                    if name == "search_kb" and isinstance(result, dict):
+                        search_trace = result.pop("search_trace", None)
+                        if search_trace is not None:
+                            detail["search"] = search_trace
+                    trace.step("tool", detail, started=started)
                 if name == "search_kb":
                     result = self._expand_named_doc_results(params, result)
                     retrieved[json.dumps(params, ensure_ascii=False)] = result.get("results", [])
