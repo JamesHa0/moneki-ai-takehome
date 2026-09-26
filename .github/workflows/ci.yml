@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-evaluate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: starter/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r starter/requirements.txt
+
+      - name: Rebuild clean database and index
+        working-directory: starter
+        run: python -m kbqa.rebuild
+
+      - name: Run unit tests
+        working-directory: starter
+        run: python -m pytest tests -q
+
+      - name: Run public evaluation in mock mode
+        run: |
+          set -euo pipefail
+
+          (
+            cd starter
+            python -m uvicorn kbqa.server:app --host 127.0.0.1 --port 8000 \
+              >/tmp/uvicorn.log 2>&1 &
+            echo $! >/tmp/uvicorn.pid
+          )
+          trap 'kill "$(cat /tmp/uvicorn.pid)" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/api/health >/dev/null || {
+            cat /tmp/uvicorn.log
+            exit 1
+          }
+
+          python eval/run_eval.py \
+            --base-url http://127.0.0.1:8000 \
+            --questions eval/public_questions.jsonl \
+            --out ci-eval
+
+          score=$(python -c "import json; print(json.load(open('ci-eval/report.json', encoding='utf-8'))['total']['earned'])")
+          echo "Public evaluation: **${score} / 100**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Public score: ${score} / 100"
+
+          python -c "import sys; sys.exit(0 if float('${score}') >= 89.0 else 1)"
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-eval
+          path: ci-eval
+          if-no-files-found: warn
