@@ -11,6 +11,7 @@ from .answerer import Answerer
 from .schemas import Answer
 from .llm import LLMClient, LLMError
 from .planner import Plan
+from .sanitize import sanitize
 from .toolspec import TOOLS
 
 MAX_TOOL_ROUNDS = 4
@@ -52,7 +53,7 @@ class LiveEngine:
         self,
         client: LLMClient,
         answerer: Answerer,
-        run_tool: Callable[[str, dict], Any],
+        run_tool: Callable[..., Any],
         today: str,
         data_period: dict,
         budget: float = 150.0,
@@ -145,7 +146,7 @@ class LiveEngine:
                     continue
                 started = time.perf_counter()
                 try:
-                    result = self.run_tool(name, params)
+                    result = self.run_tool(name, params, year=getattr(plan, "year", None))
                 except Exception as exc:  # noqa: BLE001 - 工具错误要交回模型，不能让整题崩掉
                     result = {"error": "%s: %s" % (type(exc).__name__, exc)}
                     trace.step(
@@ -265,12 +266,15 @@ class LiveEngine:
             for chunk in chunks_of(doc_id)[:MAX_NAMED_DOC_CHUNKS]:
                 if chunk.chunk_id in seen:
                     continue
+                text, _ = sanitize(chunk.text)
+                if not text:
+                    continue
                 results.append(
                     {
                         "doc_id": chunk.doc_id,
                         "chunk_id": chunk.chunk_id,
                         "score": 0.0,
-                        "text": chunk.text,
+                        "text": text,
                     }
                 )
                 seen.add(chunk.chunk_id)

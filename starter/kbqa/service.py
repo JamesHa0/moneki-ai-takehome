@@ -85,18 +85,18 @@ class Service:
     def metrics_daily(self, start: str, end: str, store_id=None, product_id=None) -> dict:
         return self.tools.daily_metrics(start, end, store_id, product_id)
 
-    def retrieve(self, query: str, top_k: int = 5) -> dict:
+    def retrieve(self, query: str, top_k: int = 5, year: Optional[int] = None) -> dict:
         """契约 §4：片段够就恰好给 top_k 条，不够才少给。
 
         `top_k` 大于索引里的片段总数时按总数封顶——这正是契约允许少给的那种情况。
         """
         wanted = max(1, min(int(top_k or 5), len(self.index.chunks) or 1))
-        result = self.retriever.search(query or "", top_k=wanted)
+        result = self.retriever.search(query or "", top_k=wanted, year=year)
         return {"results": [hit.as_result() for hit in result.hits]}
 
     # -- 工具执行（live 模式下由模型驱动） ---------------------------------------
 
-    def run_tool(self, name: str, params: dict) -> dict:
+    def run_tool(self, name: str, params: dict, year: Optional[int] = None) -> dict:
         if name not in TOOL_NAMES:
             return {"error": "没有这个工具：%s，可用工具：%s" % (name, "、".join(TOOL_NAMES))}
         schema = next(
@@ -124,7 +124,7 @@ class Service:
                 return {"error": "缺少必填参数 %s" % key}
         try:
             if name == "search_kb":
-                return self.retrieve(cleaned["query"], cleaned.get("top_k", 5))
+                return self.retrieve(cleaned["query"], cleaned.get("top_k", 5), year=year)
             return getattr(self.tools, name)(**cleaned)
         except (TypeError, ValueError) as exc:
             return {"error": "工具 %s 执行失败：%s" % (name, exc)}
