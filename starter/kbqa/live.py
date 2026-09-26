@@ -16,12 +16,17 @@ from .toolspec import TOOLS
 MAX_TOOL_ROUNDS = 4
 MAX_BAD_ARGS = 2
 MAX_REPEATED_TOOL_CALLS = 2
+MAX_SEARCH_ONLY_ROUNDS = 2
+MAX_NAMED_DOC_CHUNKS = 12
 _DOC_MARK = re.compile(r"[\[【]\s*(KB-\d+)\s*[\]】]")
-_NUMBER = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
+_KB_CODE = re.compile(r"KB-\d+", re.I)
+_NUMBER = re.compile(r"(?<![A-Za-z0-9])-?\d+(?:,\d{3})*(?:\.\d+)?(?![A-Za-z])")
 _DATE_PATTERNS = (
     re.compile(r"(?<!\d)\d{4}[-/]\d{1,2}[-/]\d{1,2}(?!\d)"),
+    re.compile(r"(?<!\d)\d{1,2}[-/]\d{1,2}(?!\d)"),
     re.compile(r"(?<!\d)\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"),
     re.compile(r"(?<!\d)\d{1,2}\s*月\s*\d{1,2}\s*日"),
+    re.compile(r"(?<!\d)\d{1,2}\s*月(?!\s*\d+\s*日)"),
 )
 _CLOSE_OUT_PROMPT = (
     "工具调用已经停止。请不要再调用工具，直接基于已收到的工具结果作答；"
@@ -69,6 +74,7 @@ class LiveEngine:
         bad_args = 0
         last_tool_key = None
         repeated_calls = 0
+        search_only_rounds = 0
 
         for round_index in range(MAX_TOOL_ROUNDS):
             remaining = deadline - time.perf_counter()
@@ -83,6 +89,7 @@ class LiveEngine:
             messages.append(reply.message)
             round_bad = 0
             repeated = False
+            round_tools: list[str] = []
             for call in reply.tool_calls:
                 name = (call.get("function") or {}).get("name") or ""
                 raw = (call.get("function") or {}).get("arguments") or "{}"
@@ -104,6 +111,7 @@ class LiveEngine:
                         }
                     )
                     continue
+                round_tools.append(name)
                 tool_key = (
                     name,
                     json.dumps(
@@ -136,9 +144,19 @@ class LiveEngine:
                     )
                     continue
                 started = time.perf_counter()
-                result = self.run_tool(name, params)
-                trace.step("tool", {"tool": name, "params": params}, started=started)
+                try:
+                    result = self.run_tool(name, params)
+                except Exception as exc:  # noqa: BLE001 - 工具错误要交回模型，不能让整题崩掉
+                    result = {"error": "%s: %s" % (type(exc).__name__, exc)}
+                    trace.step(
+                        "tool_failed",
+                        {"tool": name, "params": params, "error": str(exc)},
+                        started=started,
+                    )
+                else:
+                    trace.step("tool", {"tool": name, "params": params}, started=started)
                 if name == "search_kb":
+                    result = self._expand_named_doc_results(params, result)
                     retrieved[json.dumps(params, ensure_ascii=False)] = result.get("results", [])
                 elif "error" not in result:
                     evidence.append({"tool": name, "params": params, "result": result})
@@ -164,6 +182,21 @@ class LiveEngine:
                     retrieved,
                     trace,
                     reason="repeated_call",
+                    budget=deadline - time.perf_counter(),
+                )
+            if round_tools and all(name == "search_kb" for name in round_tools):
+                search_only_rounds += 1
+            else:
+                search_only_rounds = 0
+            if search_only_rounds >= MAX_SEARCH_ONLY_ROUNDS:
+                trace.step("tool_loop_search_stall", {"rounds": search_only_rounds})
+                return self._close_out(
+                    plan,
+                    messages,
+                    evidence,
+                    retrieved,
+                    trace,
+                    reason="search_stall",
                     budget=deadline - time.perf_counter(),
                 )
         trace.step("tool_loop_limit", {"rounds": MAX_TOOL_ROUNDS})
@@ -212,6 +245,37 @@ class LiveEngine:
         fallback.notes.append("工具调用没有收敛，已退回按工具结果渲染的模板回答：%s" % reason)
         return fallback
 
+    def _expand_named_doc_results(self, params: dict, result: dict) -> dict:
+        """查询里点名 KB-xxx 时，把该文档的其余片段也交给模型，避免只拿到标题或抬头。"""
+        query = str(params.get("query") or "")
+        doc_ids = {match.upper() for match in re.findall(r"KB-\d+", query, re.I)}
+        index = getattr(self.answerer.retriever, "index", None)
+        chunks_of = getattr(index, "chunks_of", None)
+        if not callable(chunks_of):
+            return result
+        results = list(result.get("results") or [])
+        if not doc_ids and results:
+            top_doc_id = (results[0] or {}).get("doc_id")
+            if top_doc_id:
+                doc_ids.add(str(top_doc_id).upper())
+        if not doc_ids:
+            return result
+        seen = {item.get("chunk_id") for item in results}
+        for doc_id in sorted(doc_ids):
+            for chunk in chunks_of(doc_id)[:MAX_NAMED_DOC_CHUNKS]:
+                if chunk.chunk_id in seen:
+                    continue
+                results.append(
+                    {
+                        "doc_id": chunk.doc_id,
+                        "chunk_id": chunk.chunk_id,
+                        "score": 0.0,
+                        "text": chunk.text,
+                    }
+                )
+                seen.add(chunk.chunk_id)
+        return {**result, "results": results}
+
     # -- 组装 -------------------------------------------------------------------
 
     def _initial_messages(self, plan: Plan, history: list[dict]) -> list[dict]:
@@ -232,9 +296,10 @@ class LiveEngine:
         self, plan: Plan, content: str, evidence: list[dict], retrieved: dict, trace
     ) -> Answer:
         doc_ids = []
-        for match in _DOC_MARK.finditer(content):
-            if match.group(1) not in doc_ids:
-                doc_ids.append(match.group(1))
+        for match in _KB_CODE.finditer(content):
+            doc_id = match.group(0).upper()
+            if doc_id not in doc_ids:
+                doc_ids.append(doc_id)
         text = _DOC_MARK.sub("", content).strip()
         citations = self._citations(plan, doc_ids)
         allowed = self._allowed_numbers(plan, evidence, citations)
@@ -295,7 +360,7 @@ class LiveEngine:
 
 
 def _numbers_in(text: str) -> list[float]:
-    cleaned = text or ""
+    cleaned = _KB_CODE.sub(" ", text or "")
     for pattern in _DATE_PATTERNS:
         cleaned = pattern.sub(" ", cleaned)
     values = []
