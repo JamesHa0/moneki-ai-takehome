@@ -100,6 +100,10 @@ server.py  ──►  service.py
 | GET | `/api/products` | 商品列表（看板筛选用，只读） |
 | GET | `/api/top_products` | 区间商品 Top10（按日期与门店统计） |
 
+公开题之外的补充回归题在 [`eval/extra_questions.jsonl`](eval/extra_questions.jsonl)，
+重点覆盖近失问询、注入与越权、多轮追问、年份版本和证据体积；它用于开发期回归，
+不替换评测方的公开题库。
+
 **系统固定的「今天」是 2026-09-01**（写在 `kbqa/config.py`），所有「现在 / 最近 / 目前」都以这一天为准。数据区间为 2026-05-01 至 2026-08-31。
 
 ---
