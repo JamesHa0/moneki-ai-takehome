@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from kbqa import toolspec
+from kbqa.live import _numbers_in
 from kbqa.tools import DataTools
+
+EVIDENCE_NUMBER_BUDGET = 60
 
 
 def _make_tools(tmp_path: Path) -> DataTools:
@@ -44,6 +49,65 @@ def _make_tools(tmp_path: Path) -> DataTools:
                 ("B", "2026-06-02", "S01", "P01", 1, -200, "现金", 1),
                 ("C", "2026-06-03", "S01", "P01", 1, 900, "微信", 0),
                 ("D", "2026-06-03", "S01", "P02", 1, 200, "微信", 0),
+            ],
+        )
+        con.commit()
+    finally:
+        con.close()
+    return DataTools(db)
+
+
+def _make_budget_tools(tmp_path: Path) -> DataTools:
+    db = tmp_path / "budget.db"
+    con = sqlite3.connect(str(db))
+    try:
+        con.execute(
+            "CREATE TABLE stores (store_id TEXT PRIMARY KEY, store_name TEXT, category TEXT, district TEXT)"
+        )
+        con.execute(
+            """
+            CREATE TABLE products (
+                product_id TEXT PRIMARY KEY, product_name TEXT,
+                product_category TEXT, unit_price REAL
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE sales_clean (
+                order_id TEXT, date TEXT, store_id TEXT, product_id TEXT,
+                qty INTEGER, amount_cents INTEGER, payment TEXT, is_refund INTEGER
+            )
+            """
+        )
+        con.executemany(
+            "INSERT INTO stores VALUES (?,?,?,?)",
+            [
+                ("S%02d" % index, "Store %d" % index, "category", "district")
+                for index in range(1, 6)
+            ],
+        )
+        con.executemany(
+            "INSERT INTO products VALUES (?,?,?,?)",
+            [
+                ("P%02d" % index, "Product %d" % index, "category", 1.0)
+                for index in range(1, 13)
+            ],
+        )
+        con.executemany(
+            "INSERT INTO sales_clean VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (
+                    "O%02d" % index,
+                    "2026-06-01",
+                    "S%02d" % ((index - 1) % 5 + 1),
+                    "P%02d" % index,
+                    index,
+                    index * 1000,
+                    "cash",
+                    0,
+                )
+                for index in range(1, 13)
             ],
         )
         con.commit()
@@ -129,3 +193,32 @@ def test_run_sql_accepts_read_query_and_rejects_write(tools):
 def test_connection_rejects_direct_writes(tools):
     with pytest.raises(sqlite3.OperationalError):
         tools.conn.execute("UPDATE sales_clean SET amount_cents = 0")
+
+
+def test_top_products_clamps_limit_and_stays_within_evidence_budget(tmp_path):
+    tools = _make_budget_tools(tmp_path)
+    try:
+        result = tools.top_products("2026-06-01", "2026-06-30", limit=99)
+    finally:
+        tools.close()
+
+    assert len(result["products"]) == getattr(toolspec, "MAX_TOP_PRODUCTS", 10)
+    assert all(
+        set(item) == {"product_id", "product_name", "net_revenue", "qty"}
+        for item in result["products"]
+    )
+    assert len(_numbers_in(json.dumps(result, ensure_ascii=False))) <= EVIDENCE_NUMBER_BUDGET
+
+
+def test_by_store_uses_the_small_evidence_shape(tmp_path):
+    tools = _make_budget_tools(tmp_path)
+    try:
+        result = tools.by_store("2026-06-01", "2026-06-30")
+    finally:
+        tools.close()
+
+    assert all(
+        set(item) == {"store_id", "store_name", "net_revenue", "order_count"}
+        for item in result["stores"]
+    )
+    assert len(_numbers_in(json.dumps(result, ensure_ascii=False))) <= EVIDENCE_NUMBER_BUDGET
