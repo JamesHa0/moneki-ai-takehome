@@ -50,7 +50,7 @@ export function buildTrendOption(data) {
 </script>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import * as echarts from "echarts/core"
 
 const props = defineProps({
@@ -67,10 +67,24 @@ const hasDays = computed(() => {
 
 const chartEl = ref(null)
 let chart = null
+let observer = null
 
-function render() {
-  if (!chartEl.value) return
-  if (!chart) chart = echarts.init(chartEl.value)
+/**
+ * 渲染前必须等到容器可见再量尺寸：
+ * 数据未到时容器被 v-show 隐藏（display:none），此时 init 会拿到 0 宽并回退成小画布，
+ * 之后 setOption 不会重测 —— 所以先 nextTick 等 v-show 恢复，再 resize() 重测。
+ */
+async function render() {
+  await nextTick()
+  const el = chartEl.value
+  if (!el) return
+  if (chart && chart.getDom() !== el) {
+    // 错误分支切换导致元素被重建：旧实例绑的是已脱离文档的节点，必须重 init
+    chart.dispose()
+    chart = null
+  }
+  if (!chart) chart = echarts.init(el)
+  chart.resize()
   chart.setOption(buildTrendOption(props.state.data), { notMerge: true })
 }
 
@@ -81,6 +95,11 @@ function resize() {
 onMounted(() => {
   render()
   window.addEventListener("resize", resize)
+  // 容器从隐藏变可见、或布局变化时重测（window resize 覆盖不到 v-show 切换）
+  if (typeof ResizeObserver !== "undefined" && chartEl.value) {
+    observer = new ResizeObserver(() => resize())
+    observer.observe(chartEl.value)
+  }
 })
 
 watch(
@@ -90,6 +109,10 @@ watch(
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resize)
+  if (observer) {
+    observer.disconnect()
+    observer = null
+  }
   if (chart) {
     chart.dispose()
     chart = null
