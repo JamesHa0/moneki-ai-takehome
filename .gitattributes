@@ -1,0 +1,2 @@
+# 知识库按固定 CRLF 检出，避免 300 字切块边界随平台变化。
+knowledge_base/** text eol=crlf
