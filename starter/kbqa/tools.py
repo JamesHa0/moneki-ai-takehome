@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .cleaning import open_readonly
+from .toolspec import MAX_TOP_PRODUCTS
 
 METRIC_FIELDS = ("net_revenue", "refund_amount", "orders", "aov", "qty")
 _READ_SQL = re.compile(r"^(?:SELECT|WITH)\b", re.I)
@@ -204,12 +205,12 @@ class DataTools:
         }
 
     def top_products(self, start: str, end: str, store_id=None, limit: int = 10) -> dict:
+        limit = max(1, min(int(limit or 10), MAX_TOP_PRODUCTS))
         where, params = self._where(start, end, store_id)
         rows = self.conn.execute(
             """
-            SELECT s.product_id, p.product_name, p.product_category,
+            SELECT s.product_id, p.product_name,
                    COALESCE(SUM(s.amount_cents), 0),
-                   COUNT(DISTINCT CASE WHEN s.amount_cents > 0 THEN s.order_id END),
                    COALESCE(SUM(
                        CASE
                            WHEN s.amount_cents > 0 THEN s.qty
@@ -218,7 +219,7 @@ class DataTools:
                        END
                    ), 0)
             FROM sales_clean s LEFT JOIN products p ON p.product_id = s.product_id
-            WHERE %s AND s.amount_cents <> 0 GROUP BY s.product_id ORDER BY 4 DESC
+            WHERE %s AND s.amount_cents <> 0 GROUP BY s.product_id ORDER BY 3 DESC
             """
             % where,
             params,
@@ -227,25 +228,25 @@ class DataTools:
             {
                 "product_id": r[0],
                 "product_name": r[1],
-                "product_category": r[2],
-                "net_revenue": yuan(int(r[3])),
-                "orders": int(r[4]),
-                "qty": int(r[5]),
+                "net_revenue": yuan(int(r[2])),
+                "qty": int(r[3]),
             }
             for r in rows
         ]
-        return {"start": start, "end": end, "store_id": store_id, "products": items[: max(1, limit)]}
+        return {"start": start, "end": end, "store_id": store_id, "products": items[:limit]}
 
     def by_store(self, start: str, end: str, product_id=None) -> dict:
         stores = []
         for store in self.stores():
             metrics = self.query_metrics(start, end, store["store_id"], product_id)
-            metrics.update(
-                store_name=store["store_name"],
-                category=store["category"],
-                district=store["district"],
+            stores.append(
+                {
+                    "store_id": store["store_id"],
+                    "store_name": store["store_name"],
+                    "net_revenue": metrics["net_revenue"],
+                    "order_count": metrics["orders"],
+                }
             )
-            stores.append(metrics)
         stores.sort(key=lambda item: item["net_revenue"], reverse=True)
         return {"start": start, "end": end, "stores": stores}
 

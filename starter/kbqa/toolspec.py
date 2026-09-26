@@ -5,6 +5,7 @@ from __future__ import annotations
 _DATE = {"type": "string", "description": "日期，YYYY-MM-DD，闭区间"}
 _STORE = {"type": "string", "description": "门店编号，例如 S01；不传表示全部门店"}
 _PRODUCT = {"type": "string", "description": "商品编号，例如 P06；不传表示全部商品"}
+MAX_TOP_PRODUCTS = 10
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -44,7 +45,11 @@ TOOLS = [
             "start": _DATE,
             "end": _DATE,
             "store_id": _STORE,
-            "limit": {"type": "integer", "description": "返回条数，默认 10"},
+            "limit": {
+                "type": "integer",
+                "description": "返回条数，默认 10",
+                "maximum": MAX_TOP_PRODUCTS,
+            },
         },
         ["start", "end"],
     ),
