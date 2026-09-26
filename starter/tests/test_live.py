@@ -162,7 +162,10 @@ def test_service_retrieve_and_search_tool_forward_year():
     class RetrieverSpy:
         def search(self, query, top_k=5, **kwargs):
             calls.append({"query": query, "top_k": top_k, **kwargs})
-            return SimpleNamespace(hits=[])
+            return SimpleNamespace(
+                hits=[],
+                as_trace=lambda: {"query": query, "hits": [], "filtered": []},
+            )
 
     service = Service.__new__(Service)
     service.retriever = RetrieverSpy()
@@ -175,6 +178,60 @@ def test_service_retrieve_and_search_tool_forward_year():
         {"query": "今年 618", "top_k": 2, "year": 2026},
         {"query": "今年 618", "top_k": 2, "year": 2026},
     ]
+
+
+def test_search_tool_returns_trace_without_changing_public_retrieve():
+    class RetrieverSpy:
+        def search(self, query, top_k=5, **kwargs):
+            return SimpleNamespace(
+                hits=[],
+                as_trace=lambda: {
+                    "query": query,
+                    "hits": [{"doc_id": "KB-023", "chunk_id": "KB-023#1", "score": 42.0}],
+                    "filtered": [{"doc_id": "KB-024", "reason": "year penalty"}],
+                },
+            )
+
+    service = Service.__new__(Service)
+    service.retriever = RetrieverSpy()
+    service.index = SimpleNamespace(chunks=[object()])
+
+    public = service.retrieve("今年 618")
+    tool = service.run_tool("search_kb", {"query": "今年 618"})
+
+    assert "search_trace" not in public
+    assert tool["search_trace"]["hits"][0]["score"] == 42.0
+    assert tool["search_trace"]["filtered"][0]["doc_id"] == "KB-024"
+
+
+def test_live_search_tool_trace_includes_hits_and_filtered():
+    params = {"query": "三文鱼 赔付", "top_k": 5}
+    client = _Client(
+        [
+            _tool_reply("search_kb", params, "call-1"),
+            _text_reply("供应商最后赔付 8600 元。[KB-022]"),
+        ]
+    )
+    answerer = _Answerer({"KB-022": "供应商赔付 8,600 元。"})
+
+    def run_tool(name, args, year=None):
+        return {
+            "results": [{"doc_id": "KB-022", "text": "供应商赔付 8,600 元。"}],
+            "search_trace": {
+                "query": args["query"],
+                "hits": [{"doc_id": "KB-022", "chunk_id": "KB-022#1", "score": 42.0}],
+                "filtered": [{"doc_id": "KB-024", "reason": "年份不符"}],
+            },
+        }
+
+    engine = _engine(client, answerer, run_tool)
+    trace = Trace(trace_id="t-search-trace", question="供应商最后赔了多少钱？")
+
+    engine.answer(_plan(), trace, [])
+
+    tool_step = next(step for step in trace.steps if step["step"] == "tool")
+    assert tool_step["detail"]["search"]["hits"][0]["score"] == 42.0
+    assert tool_step["detail"]["search"]["filtered"][0]["doc_id"] == "KB-024"
 
 
 def test_live_tool_loop_forwards_plan_year():
