@@ -87,4 +87,36 @@ function onProduct(value) {
 .filter-select {
   width: 200px;
 }
+
+@media (max-width: 640px) {
+  .filter-bar :deep(.el-form--inline) {
+    display: block;
+  }
+  .filter-bar :deep(.el-form-item) {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+  }
+  .filter-bar :deep(.el-form-item:last-child) {
+    margin-bottom: 0;
+  }
+  .filter-bar :deep(.el-form-item__label) {
+    display: block;
+    text-align: left;
+  }
+  .filter-bar :deep(.el-form-item__content) {
+    width: 100%;
+    min-width: 0;
+  }
+  .filter-bar :deep(.el-date-editor) {
+    width: 100%;
+    min-width: 0;
+  }
+  .filter-bar :deep(.el-range-input) {
+    font-size: 12px;
+  }
+  .filter-select {
+    width: 100%;
+  }
+}
 </style>

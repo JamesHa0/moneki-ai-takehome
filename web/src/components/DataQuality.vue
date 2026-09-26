@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { formatCount } from "../utils/format"
 
 const props = defineProps({
@@ -8,6 +8,16 @@ const props = defineProps({
 })
 
 defineEmits(["retry"])
+
+const narrow = ref(typeof window !== "undefined" && window.innerWidth < 640)
+const descColumns = computed(() => (narrow.value ? 1 : 3))
+
+function updateViewport() {
+  narrow.value = window.innerWidth < 640
+}
+
+onMounted(() => window.addEventListener("resize", updateViewport))
+onBeforeUnmount(() => window.removeEventListener("resize", updateViewport))
 
 /** 六项剔除计数的规范键；响应里键缺失时显示 0。 */
 const REMOVED_KEYS = [
@@ -60,7 +70,7 @@ const period = computed(() => {
       <el-button size="small" @click="$emit('retry')">重试</el-button>
     </el-alert>
     <template v-else-if="report">
-      <el-descriptions :column="3" border size="small">
+      <el-descriptions :column="descColumns" border size="small">
         <el-descriptions-item label="原始行数">{{ formatCount(report.raw_rows) }}</el-descriptions-item>
         <el-descriptions-item label="保留行数">{{ formatCount(report.kept_rows) }}</el-descriptions-item>
         <el-descriptions-item label="数据区间">

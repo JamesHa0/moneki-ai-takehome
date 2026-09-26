@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { getTrace } from "../api"
 import { formatMs, inlineSummary, prettyJson } from "../utils/format"
 
@@ -15,6 +15,9 @@ const emit = defineEmits(["update:modelValue"])
 const loading = ref(false)
 const error = ref("")
 const trace = ref(null)
+const narrow = ref(typeof window !== "undefined" && window.innerWidth < 768)
+const drawerSize = computed(() => (narrow.value ? "100%" : "680px"))
+const descColumns = computed(() => (narrow.value ? 1 : 2))
 
 async function load() {
   if (!props.traceId) return
@@ -37,6 +40,13 @@ watch(
     if (visible) load()
   },
 )
+
+function updateViewport() {
+  narrow.value = window.innerWidth < 768
+}
+
+onMounted(() => window.addEventListener("resize", updateViewport))
+onBeforeUnmount(() => window.removeEventListener("resize", updateViewport))
 
 function close(value) {
   emit("update:modelValue", value)
@@ -70,6 +80,22 @@ function retrievalFields(step) {
   const reason = merged.filter_reason || merged.filtered_reason || merged.drop_reason
   if (reason) fields.push(["过滤原因", reason])
   return fields
+}
+
+function detailOf(step) {
+  return asObject(step && step.detail) || {}
+}
+
+function retrievalHits(step) {
+  return asArray(detailOf(step).hits).filter((hit) => asObject(hit))
+}
+
+function filteredDocs(step) {
+  return asArray(detailOf(step).filtered).filter((item) => asObject(item))
+}
+
+function formatScore(value) {
+  return typeof value === "number" ? value.toFixed(4) : String(value ?? "—")
 }
 
 function pickKnown(obj) {
@@ -115,7 +141,7 @@ function stepName(step, index) {
   <el-drawer
     :model-value="modelValue"
     title="处理过程"
-    size="680px"
+    :size="drawerSize"
     destroy-on-close
     @update:model-value="close"
   >
@@ -125,7 +151,7 @@ function stepName(step, index) {
       <el-button size="small" class="retry" @click="load">重试</el-button>
     </div>
     <template v-else-if="trace">
-      <el-descriptions :column="2" border size="small">
+      <el-descriptions :column="descColumns" border size="small">
         <el-descriptions-item label="trace_id">{{ trace.trace_id || "—" }}</el-descriptions-item>
         <el-descriptions-item label="总耗时">{{ formatMs(trace.total_ms) }}</el-descriptions-item>
         <el-descriptions-item label="session_id">{{ trace.session_id || "—" }}</el-descriptions-item>
@@ -143,6 +169,21 @@ function stepName(step, index) {
         <div v-if="retrievalFields(step).length" class="kv">
           <div v-for="[label, value] in retrievalFields(step)" :key="label" class="kv-row">
             <span class="kv-label">{{ label }}</span><span>{{ value }}</span>
+          </div>
+        </div>
+        <div v-if="retrievalHits(step).length" class="retrieval-block">
+          <div class="retrieval-title">检索命中</div>
+          <div v-for="(hit, hitIndex) in retrievalHits(step)" :key="hitIndex" class="retrieval-row">
+            <el-tag size="small">{{ hit.doc_id || "—" }}</el-tag>
+            <span class="chunk">{{ hit.chunk_id || "—" }}</span>
+            <span class="score">score {{ formatScore(hit.score) }}</span>
+          </div>
+        </div>
+        <div v-if="filteredDocs(step).length" class="retrieval-block">
+          <div class="retrieval-title">过滤片段</div>
+          <div v-for="(item, itemIndex) in filteredDocs(step)" :key="itemIndex" class="retrieval-row">
+            <el-tag size="small" type="info">{{ item.doc_id || "—" }}</el-tag>
+            <span class="reason">{{ item.reason || "未说明原因" }}</span>
           </div>
         </div>
         <div v-if="toolFields(step).length" class="kv">
@@ -239,6 +280,30 @@ h4 {
 }
 .kv-value {
   word-break: break-all;
+}
+.retrieval-block {
+  margin-top: 8px;
+}
+.retrieval-title {
+  color: #909399;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.retrieval-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.chunk,
+.reason {
+  color: #606266;
+  word-break: break-all;
+}
+.score {
+  color: #909399;
 }
 .json-block {
   margin-top: 6px;

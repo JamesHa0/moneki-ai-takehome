@@ -33,11 +33,11 @@ const rows = computed(() => {
     </el-alert>
     <template v-else>
       <el-table v-if="rows.length" :data="rows" size="small">
-        <el-table-column prop="product_name" label="商品名" min-width="180" />
-        <el-table-column label="净营业额" width="140" align="right">
+        <el-table-column prop="product_name" label="商品名" min-width="120" />
+        <el-table-column label="净营业额" width="108" align="right">
           <template #default="{ row }">{{ formatMoney(row.net_revenue) }}</template>
         </el-table-column>
-        <el-table-column label="销量" width="100" align="right">
+        <el-table-column label="销量" width="72" align="right">
           <template #default="{ row }">{{ formatCount(row.qty) }}</template>
         </el-table-column>
       </el-table>
