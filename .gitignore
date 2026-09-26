@@ -11,9 +11,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# ─── 前端（若后续引入）───
+# ─── 前端 ───
 node_modules/
 dist/
+!web/dist/
+!web/dist/**
 
 # ─── 工作底稿与工具目录（不参与交付）───
 .workbuddy/

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .service import Service
@@ -114,3 +116,37 @@ def data_quality() -> dict:
         "data_period": current.data_period,
         "kb_warnings": current.index.warnings,
     }
+
+
+@app.get("/api/stores")
+def stores():
+    """门店下拉用的只读列表。"""
+    return service().tools.stores()
+
+
+@app.get("/api/products")
+def products():
+    """商品下拉用的只读列表。"""
+    return service().tools.products()
+
+
+@app.get("/api/top_products")
+def top_products(
+    start: str = Query(...),
+    end: str = Query(...),
+    store_id: Optional[str] = None,
+):
+    """看板的商品 Top10：只按日期与门店统计，不接收 product_id。"""
+    bad = _bad_date(start, end)
+    return bad or service().tools.top_products(
+        start=start,
+        end=end,
+        store_id=store_id,
+        limit=10,
+    )
+
+
+# 前端看板：构建产物已提交进仓库时，从根路径同源托管；dist 不存在则跳过，服务照常启动。
+dist_dir = Path(__file__).resolve().parents[2] / "web" / "dist"
+if dist_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(dist_dir), html=True), name="web")

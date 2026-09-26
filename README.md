@@ -96,6 +96,9 @@ server.py  ──►  service.py
 | POST | `/api/chat` | 混合问答 |
 | GET | `/api/trace/{trace_id}` | 单次回答的完整处理过程 |
 | GET | `/api/data_quality` | 清洗掉了多少行、各因为什么 |
+| GET | `/api/stores` | 门店列表（看板筛选用，只读） |
+| GET | `/api/products` | 商品列表（看板筛选用，只读） |
+| GET | `/api/top_products` | 区间商品 Top10（按日期与门店统计） |
 
 **系统固定的「今天」是 2026-09-01**（写在 `kbqa/config.py`），所有「现在 / 最近 / 目前」都以这一天为准。数据区间为 2026-05-01 至 2026-08-31。
 
@@ -120,9 +123,20 @@ server.py  ──►  service.py
 评审统一切到 `deepseek-flash`，而它默认就是开思考的 —— 不关掉可保证开发环境与评审环境行为一致。这个系统的难点是多轮工具调用且「数字必须来自工具结果」，思考模式规划更稳；`live.py` 还有一层「模型回答里的数字在工具结果里找不到就回退模板回答」的兜底。
 代价是更慢，因此把单次调用超时设为 `min(120 秒, 剩余预算)`、`/api/chat` 总预算 180 秒。
 
-### 前端用单页 + CDN，不起构建链
+### 前端是 Vue 3 SPA，构建产物随仓库提交
 
-看板只需要四块（日期与门店筛选、营业额趋势图、Top10 商品表、数据质量信息）加一个对话框和一个 trace 面板。用 FastAPI 直接托管一个 `index.html`（Vue 3 + ECharts 走 CDN）可以避免引入 npm 构建链，交付时 `make run` 单端口即可打开。省下的时间投在检索质量与文档上。
+看板是组件化的单入口 SPA，源码在 `web/`：Vue 3 Composition API + Element Plus（筛选、表格、抽屉、提示）+ ECharts（趋势图），Vite 构建。页面包含筛选联动、指标卡、趋势图、Top10、数据质量、对话区和 trace 抽屉，不引入路由与状态库。
+
+**评审运行不需要 Node**：构建产物 `web/dist` 已提交进仓库，FastAPI 启动时检测到 `web/dist` 存在即从根路径同源托管，`make setup / rebuild / run` 三步后打开 `http://127.0.0.1:8000/` 即可；`dist` 不存在时跳过挂载，API 服务照常启动。
+
+只有要修改前端源码时才需要 Node 18+：
+
+```bash
+cd web
+npm ci          # 首次安装（版本全部锁定在 package-lock.json）
+npm run dev     # 开发服务器，/api 经 Vite proxy 转发到 127.0.0.1:8000
+npm run build   # 重新构建到 web/dist 并提交
+```
 
 ---
 
@@ -201,6 +215,6 @@ KB-001 §2.2 字面列出的三种格式是 `YYYY-MM-DD`、`YYYY/M/D`、`DD-MM-Y
 | 清洗与指标口径（KB-001 v3） | 已完成 —— `valid_sales_rows = 18290`，六条剔除计数 8 / 150 / 30 / 10 / 40 / 100 |
 | 检索（分词 / 文档格式 / 索引缓存 / top-k / 引用一致性） | 进行中 |
 | 混合问答 `/api/chat` | 未开始 |
-| 前端看板与 trace 面板 | 未开始 |
+| 前端看板与 trace 面板 | 已完成 —— `web/`（Vue 3 + Element Plus + ECharts），产物 `web/dist` 已提交，FastAPI 同源托管 |
 
 评测得分与前后对比见 [`EVAL_REPORT.md`](EVAL_REPORT.md)；缺陷定位过程见 [`DEBUG_LOG.md`](DEBUG_LOG.md)。
