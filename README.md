@@ -52,6 +52,82 @@ export LLM_MODEL=deepseek-flash
 
 ## 二、架构
 
+### 总览
+
+```mermaid
+flowchart TB
+  subgraph SRC["可整体替换的输入（评审会换成同结构的另一份数据与文档）"]
+    D["data/：pos.db · sales.csv · stores.csv · products.csv"]
+    K["knowledge_base/：35 篇 md / txt / html"]
+  end
+
+  subgraph REBUILD["make rebuild（幂等、确定性）"]
+    CL["cleaning.py<br/>KB-001 v3 口径：六条剔除 + 七字段去重"]
+    IX["loader → chunker → 中文二元组分词 → BM25"]
+  end
+
+  subgraph CORE["问答核心 starter/kbqa/"]
+    PL["planner.py：路由 data / doc / hybrid / refusal / clarify<br/>安全判据①：越权与破坏性请求在这里前置拒答"]
+    TL["tools.py：指标与工具<br/>安全判据②：只读连接 mode=ro + 单条 SELECT 守卫"]
+    RT["retriever.py：BM25 + 年份/生效期/门店加权<br/>安全判据③：_hit() 剥离文档里的注入句"]
+    AN["answerer.py：无 Key 降级模板"]
+    LV["live.py：真实模型（工具循环 + 收敛收口）"]
+  end
+
+  subgraph SRV["FastAPI · server.py（契约 §4–§6）"]
+    EP["契约接口：health · metrics/summary · metrics/daily<br/>data_quality · retrieve · chat · trace"]
+    DP["看板新增只读接口：stores · products · top_products"]
+    ST["/ → web/dist 同源托管（评审端不需要 Node）"]
+  end
+
+  subgraph UI["看板 web/（Vue 3 + Element Plus + ECharts）"]
+    BD["筛选联动 · 指标卡 · 趋势图 · Top10 · 数据质量"]
+    CP["对话框：回答 + 引用 + 数据依据"]
+    TD["TraceDrawer：命中/分数/被过滤/prompt/耗时（第四关）"]
+  end
+
+  subgraph QA["回归闭环"]
+    EV["eval/run_eval.py 公开题库 55 题<br/>mock 89.00 · live 91.00"]
+    CI["Actions：rebuild → pytest → 全量评测<br/>低于 89.00 即红"]
+  end
+
+  LLM["DeepSeek deepseek-flash<br/>OpenAI 兼容协议，三个环境变量切换"]
+
+  D --> CL --> TL
+  K --> IX --> RT
+  PL --> TL
+  PL --> RT
+  RT --> AN
+  TL --> AN
+  PL --> LV
+  LV <-.-> LLM
+  AN --> EP
+  LV --> EP
+  RT --> EP
+  TL --> DP
+  DP --> BD
+  EP --> CP
+  EP --> TD
+  ST --> BD
+  CP --> TD
+  EV --> CI
+```
+
+**怎么读这张图**
+
+- **上两层是"可替换的输入 + 两条重建链路"**：换 `data/` 或 `knowledge_base/` 只需重跑
+  `make rebuild`，代码里没有写死任何数字、日期或文档内容；
+- **中间是问答核心**：`planner` 先定路由与安全边界，`tools`（数据库）与 `retriever`（文档）
+  两条腿并行，再由 `answerer`（降级模板）或 `live`（真实模型）组织答案——
+  **回答里的经营数字始终由代码从工具结果渲染，不经模型心算**；
+- **三个安全判据分别落在三层**：越权/破坏性请求在 planner 前置拒答（①）、
+  数据库连接层只读（②）、检索命中时剥离文档里的注入句（③）——纵深防御，
+  任何一层单独被绕过还有下一层；
+- **右边是回归闭环**：公开题库 + 自有题库的分数就是回归红线，CI 在每次 push 时重跑，
+  低于 89.00 直接失败。
+
+下面两个 ASCII 图是同一架构的细节视角（离线重建 / 在线请求）。
+
 ### 离线重建（`make rebuild`）
 
 ```
