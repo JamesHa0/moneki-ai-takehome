@@ -37,6 +37,9 @@ RELATIVE_FUTURE = {
 }
 
 
+_BARE_MONTH_DAY = re.compile(r"(%s)\s*\u6708(?:\u4efd)?\s*(\d{1,2})(?!\d)" % _NUM)
+
+
 def cn_number(text: str) -> Optional[int]:
     text = (text or "").strip()
     if text.isdigit():
@@ -263,6 +266,12 @@ def _month_and_day_windows(
             spec.labels.append("%d月第%d周" % (month, number))
             continue
         days = [cn_number(match.group(1)) for match in _DAY.finditer(segment)]
+        if not days:
+            bare = _BARE_MONTH_DAY.match(segment)
+            if bare:
+                day = cn_number(bare.group(2))
+                if day and 1 <= day <= 31:
+                    days = [day]
         days = [day for day in days if day and 1 <= day <= 31]
         if not days:
             windows.append(month_window(year, month))

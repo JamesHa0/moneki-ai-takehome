@@ -287,11 +287,50 @@ class LiveEngine:
 
     # -- 组装 -------------------------------------------------------------------
 
+    def _has_required_data_evidence(self, plan: Plan, evidence: list[dict]) -> bool:
+        if not plan.needs_data:
+            return True
+        data_items = [item for item in evidence if item.get("tool") != "search_kb"]
+        if plan.kind != "anomaly":
+            return bool(data_items)
+        if not plan.window:
+            return False
+        start, end = plan.window
+        for item in data_items:
+            if item.get("tool") != "query_metrics":
+                continue
+            params = item.get("params") or {}
+            if (
+                params.get("start") == start
+                and params.get("end") == end
+                and params.get("store_id") == plan.store_id
+                and params.get("product_id") == plan.product_id
+            ):
+                return True
+        return False
+
     def _initial_messages(self, plan: Plan, history: list[dict]) -> list[dict]:
         system = SYSTEM_PROMPT.format(
             today=self.today, start=self.data_period["start"], end=self.data_period["end"]
         )
         messages = [{"role": "system", "content": system}]
+        if plan.needs_data or plan.needs_docs:
+            route = [
+                "本轮路由约束：needs_data=%s，needs_docs=%s。"
+                % (str(plan.needs_data).lower(), str(plan.needs_docs).lower())
+            ]
+            if plan.window:
+                route.append("已解析时间窗口：%s 至 %s。" % plan.window)
+            route.append("指标：%s。" % plan.metric)
+            if plan.store_id:
+                route.append("门店：%s。" % plan.store_id)
+            if plan.product_id:
+                route.append("商品：%s。" % plan.product_id)
+            if plan.needs_data:
+                route.append("调用数据工具时必须使用上述窗口和筛选条件。")
+            if plan.needs_docs:
+                route.append("需要文档依据时调用 search_kb。")
+            messages.append({"role": "system", "content": "".join(route)})
         for turn in history[-3:]:
             messages.append({"role": "user", "content": turn.get("question", "")})
             messages.append({"role": "assistant", "content": turn.get("answer", "")})
@@ -304,6 +343,19 @@ class LiveEngine:
     def _finalise(
         self, plan: Plan, content: str, evidence: list[dict], retrieved: dict, trace
     ) -> Answer:
+        if not self._has_required_data_evidence(plan, evidence):
+            trace.step(
+                "plan_data_missing_fallback",
+                {
+                    "kind": plan.kind,
+                    "window": plan.window,
+                    "metric": plan.metric,
+                    "tools": [item.get("tool") for item in evidence],
+                },
+            )
+            fallback = self.answerer.answer(plan, trace)
+            fallback.notes.append("本轮路由要求数据库证据，模型未提供匹配结果，已回退模板回答。")
+            return fallback
         doc_ids = []
         for match in _KB_CODE.finditer(content):
             doc_id = match.group(0).upper()

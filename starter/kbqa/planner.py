@@ -265,7 +265,12 @@ class Planner:
             "price",
         ):
             plan.intent = "data"
-        elif E.has_any(text, ("为什么", "原因", "怎么回事", "咋回事")):
+        elif E.has_any(text, E.WHY_WORDS) and plan.kind not in (
+            "doc",
+            "anomaly",
+            "target",
+            "price",
+        ):
             plan.intent, plan.kind = "doc", "doc"
 
         plan.slots["asks_why"] = bool(asks_why or abnormal)

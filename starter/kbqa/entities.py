@@ -310,9 +310,22 @@ def wants_historical(text: str) -> bool:
     return has_any(text, HISTORICAL_WORDS)
 
 
+DECLINE_WORDS = ("低了", "降了", "跌了", "少了")
+TREND_ALTERNATIVES = (
+    "高了还是低了",
+    "低了还是高了",
+    "涨了还是跌了",
+    "跌了还是涨了",
+)
+
+
 def is_abnormal(text: str) -> bool:
     """不带“为什么”，但确实在问“这怎么回事”。"""
-    return has_any(text, ABNORMAL_WORDS)
+    if has_any(text, TREND_ALTERNATIVES):
+        return False
+    if has_any(text, ABNORMAL_WORDS):
+        return True
+    return has_any(text, DECLINE_WORDS) and find_metric(text) is not None
 
 
 def asks_about_names(text: str) -> bool:
