@@ -271,10 +271,44 @@ class Answerer(HybridAnswers):
             )
             text = render.describe_payment(result, scope, focus)
         elif plan.kind == "top_products":
-            result = self._call(
-                evidence, "top_products", start=start, end=end, store_id=plan.store_id, limit=10
-            )
-            text = render.describe_top(result, scope)
+            if plan.slots.get("asks_bottom") and plan.slots.get("asks_top"):
+                top_result = self._call(
+                    evidence,
+                    "top_products",
+                    start=start,
+                    end=end,
+                    store_id=plan.store_id,
+                    limit=10,
+                )
+                bottom_result = self._call(
+                    evidence,
+                    "bottom_products",
+                    start=start,
+                    end=end,
+                    store_id=plan.store_id,
+                    limit=10,
+                )
+                text = render.describe_product_extremes(top_result, bottom_result, scope)
+            elif plan.slots.get("asks_bottom"):
+                bottom_result = self._call(
+                    evidence,
+                    "bottom_products",
+                    start=start,
+                    end=end,
+                    store_id=plan.store_id,
+                    limit=10,
+                )
+                text = render.describe_bottom(bottom_result, scope)
+            else:
+                top_result = self._call(
+                    evidence,
+                    "top_products",
+                    start=start,
+                    end=end,
+                    store_id=plan.store_id,
+                    limit=10,
+                )
+                text = render.describe_top(top_result, scope)
         elif plan.kind == "by_store":
             result = self._call(evidence, "by_store", start=start, end=end, product_id=plan.product_id)
             text = render.describe_by_store(result, scope)

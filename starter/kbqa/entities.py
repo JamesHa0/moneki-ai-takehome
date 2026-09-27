@@ -311,6 +311,22 @@ def wants_historical(text: str) -> bool:
 
 
 DECLINE_WORDS = ("低了", "降了", "跌了", "少了")
+TOP_RANK_WORDS = (
+    "最高",
+    "最多",
+    "最好",
+    "第一",
+    "top",
+    "排名",
+    "最畅销",
+    "卖得最好",
+    "卖得最多",
+    "销量最高",
+    "最好卖",
+    "销冠",
+)
+BOTTOM_RANK_WORDS = ("最差", "卖得最差", "卖得最少", "销量最低", "最低", "最少")
+TREND_QUANTITY = ("低了多少", "少了多少", "降了多少", "跌了多少")
 TREND_ALTERNATIVES = (
     "高了还是低了",
     "低了还是高了",
@@ -319,13 +335,24 @@ TREND_ALTERNATIVES = (
 )
 
 
+#: 比较句式 + 数量问法 = 在要一个数（"比上月少了多少"），不是问"出了什么事"。
+#: 少了/低了 这类软下降信号单独不足以判定异常，否则隐藏题库里"换一种问法"的
+#: 比较型数据题会被当成异常题（answer_type_in: [data] 直接不成立）。
+COMPARISON_MARKERS = ("比", "相比", "环比", "同比", "对比", "比起")
+QUANTITY_ASKS = ("多少", "几")
+
+
 def is_abnormal(text: str) -> bool:
     """不带“为什么”，但确实在问“这怎么回事”。"""
-    if has_any(text, TREND_ALTERNATIVES):
+    if has_any(text, TREND_ALTERNATIVES + TREND_QUANTITY):
         return False
     if has_any(text, ABNORMAL_WORDS):
         return True
-    return has_any(text, DECLINE_WORDS) and find_metric(text) is not None
+    if not (has_any(text, DECLINE_WORDS) and find_metric(text) is not None):
+        return False
+    if has_any(text, COMPARISON_MARKERS) and has_any(text, QUANTITY_ASKS):
+        return False
+    return True
 
 
 def asks_about_names(text: str) -> bool:

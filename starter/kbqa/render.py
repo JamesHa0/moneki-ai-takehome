@@ -113,6 +113,49 @@ def describe_top(result: dict, scope: str, limit: int = 3) -> str:
     return "%s 卖得最好的是%s。" % (scope, "；".join(pieces))
 
 
+def _product_brief(item: dict) -> str:
+    return "%s（%s）净营业额 %s 元、销量 %s 件" % (
+        item["product_name"],
+        item["product_id"],
+        money(item["net_revenue"]),
+        count(item["qty"]),
+    )
+
+
+def _extreme_items(items: list[dict]) -> list[dict]:
+    if not items:
+        return []
+    value = items[0]["net_revenue"]
+    return [item for item in items if item["net_revenue"] == value]
+
+
+def describe_bottom(result: dict, scope: str) -> str:
+    items = result.get("products") or []
+    if not items:
+        return "%s：区间内没有销售记录。" % scope
+    pieces = [_product_brief(item) for item in _extreme_items(items)]
+    return "%s 卖得最差的是%s。" % (scope, "；".join(pieces))
+
+
+def describe_product_extremes(top_result: dict, bottom_result: dict, scope: str) -> str:
+    top = _extreme_items(top_result.get("products") or [])
+    bottom = _extreme_items(bottom_result.get("products") or [])
+    if not top and not bottom:
+        return "%s：区间内没有销售记录。" % scope
+    if not top:
+        return describe_bottom(bottom_result, scope)
+    if not bottom:
+        return "%s 卖得最好的是%s。" % (
+            scope,
+            "；".join(_product_brief(item) for item in top),
+        )
+    return "%s 卖得最好的是%s；卖得最差的是%s。" % (
+        scope,
+        "；".join(_product_brief(item) for item in top),
+        "；".join(_product_brief(item) for item in bottom),
+    )
+
+
 def describe_by_store(result: dict, scope: str, limit: int = 5) -> str:
     stores = result.get("stores") or []
     if not stores:

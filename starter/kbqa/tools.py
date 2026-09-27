@@ -205,8 +205,17 @@ class DataTools:
         }
 
     def top_products(self, start: str, end: str, store_id=None, limit: int = 10) -> dict:
+        return self._product_ranking(start, end, store_id, limit, reverse=True)
+
+    def bottom_products(self, start: str, end: str, store_id=None, limit: int = 10) -> dict:
+        return self._product_ranking(start, end, store_id, limit, reverse=False)
+
+    def _product_ranking(
+        self, start: str, end: str, store_id, limit: int, reverse: bool
+    ) -> dict:
         limit = max(1, min(int(limit or 10), MAX_TOP_PRODUCTS))
         where, params = self._where(start, end, store_id)
+        direction = "DESC" if reverse else "ASC"
         rows = self.conn.execute(
             """
             SELECT s.product_id, p.product_name,
@@ -219,9 +228,10 @@ class DataTools:
                        END
                    ), 0)
             FROM sales_clean s LEFT JOIN products p ON p.product_id = s.product_id
-            WHERE %s AND s.amount_cents <> 0 GROUP BY s.product_id ORDER BY 3 DESC
+            WHERE %s AND s.amount_cents <> 0
+            GROUP BY s.product_id ORDER BY 3 %s, s.product_id ASC
             """
-            % where,
+            % (where, direction),
             params,
         ).fetchall()
         items = [
@@ -233,7 +243,18 @@ class DataTools:
             }
             for r in rows
         ]
-        return {"start": start, "end": end, "store_id": store_id, "products": items[:limit]}
+        selected = items[:limit]
+        if selected and len(items) > limit:
+            boundary = selected[-1]["net_revenue"]
+            selected.extend(
+                item for item in items[limit:] if item["net_revenue"] == boundary
+            )
+        return {
+            "start": start,
+            "end": end,
+            "store_id": store_id,
+            "products": selected,
+        }
 
     def by_store(self, start: str, end: str, product_id=None) -> dict:
         stores = []

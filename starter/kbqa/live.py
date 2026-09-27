@@ -287,27 +287,55 @@ class LiveEngine:
 
     # -- 组装 -------------------------------------------------------------------
 
+    def _required_data_tools(self, plan: Plan) -> tuple[str, ...]:
+        if plan.kind == "anomaly":
+            return ("query_metrics",)
+        if plan.kind == "top_products":
+            asks_bottom = bool(plan.slots.get("asks_bottom"))
+            asks_top = bool(plan.slots.get("asks_top"))
+            required = []
+            if asks_top or not asks_bottom:
+                required.append("top_products")
+            if asks_bottom:
+                required.append("bottom_products")
+            return tuple(required)
+        return ()
+
     def _has_required_data_evidence(self, plan: Plan, evidence: list[dict]) -> bool:
         if not plan.needs_data:
             return True
         data_items = [item for item in evidence if item.get("tool") != "search_kb"]
-        if plan.kind != "anomaly":
+        required = self._required_data_tools(plan)
+        if not required:
             return bool(data_items)
         if not plan.window:
             return False
         start, end = plan.window
-        for item in data_items:
-            if item.get("tool") != "query_metrics":
-                continue
-            params = item.get("params") or {}
-            if (
-                params.get("start") == start
-                and params.get("end") == end
-                and params.get("store_id") == plan.store_id
-                and params.get("product_id") == plan.product_id
-            ):
-                return True
-        return False
+        for tool in required:
+            matched = False
+            for item in data_items:
+                if item.get("tool") != tool:
+                    continue
+                params = item.get("params") or {}
+                if (
+                    params.get("start") != start
+                    or params.get("end") != end
+                    or params.get("store_id") != plan.store_id
+                    or params.get("product_id") != plan.product_id
+                ):
+                    continue
+                if tool in ("top_products", "bottom_products"):
+                    try:
+                        limit = int(params.get("limit", 10) or 10)
+                    except (TypeError, ValueError):
+                        continue
+                    if limit < 10:
+                        continue
+                matched = True
+                break
+            if not matched:
+                return False
+        return True
 
     def _initial_messages(self, plan: Plan, history: list[dict]) -> list[dict]:
         system = SYSTEM_PROMPT.format(
@@ -316,8 +344,12 @@ class LiveEngine:
         messages = [{"role": "system", "content": system}]
         if plan.needs_data or plan.needs_docs:
             route = [
-                "本轮路由约束：needs_data=%s，needs_docs=%s。"
-                % (str(plan.needs_data).lower(), str(plan.needs_docs).lower())
+                "本轮路由约束：kind=%s，needs_data=%s，needs_docs=%s。"
+                % (
+                    plan.kind,
+                    str(plan.needs_data).lower(),
+                    str(plan.needs_docs).lower(),
+                )
             ]
             if plan.window:
                 route.append("已解析时间窗口：%s 至 %s。" % plan.window)
@@ -327,6 +359,9 @@ class LiveEngine:
             if plan.product_id:
                 route.append("商品：%s。" % plan.product_id)
             if plan.needs_data:
+                required = self._required_data_tools(plan)
+                if required:
+                    route.append("本轮必须调用工具：%s。" % "、".join(required))
                 route.append("调用数据工具时必须使用上述窗口和筛选条件。")
             if plan.needs_docs:
                 route.append("需要文档依据时调用 search_kb。")

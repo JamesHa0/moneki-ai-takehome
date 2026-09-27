@@ -204,7 +204,14 @@ class Planner:
         plan.window = windows[0]
         explicit_metric = bool(plan.slots.get("metric_explicit"))
         asks_policy = E.has_any(text, E.POLICY_WORDS)
-        asks_rank = E.has_any(text, E.RANK_WORDS)
+        asks_top = E.has_any(text, E.TOP_RANK_WORDS)
+        asks_bottom = E.has_any(text, E.BOTTOM_RANK_WORDS)
+        asks_rank = (
+            asks_top
+            or asks_bottom
+            or E.has_any(text, E.RANK_WORDS)
+            or E.has_any(text, E.SALES_RANK_WORDS)
+        )
         asks_payment = E.has_any(text, E.PAYMENT_WORDS)
         asks_why = E.has_any(text, E.WHY_WORDS)
         asks_target = E.has_any(text, E.TARGET_WORDS)
@@ -221,7 +228,9 @@ class Planner:
             or E.has_any(text, E.SALES_RANK_WORDS)
             or (asks_business and plan.slots.get("time_scoped"))
         )
-        compares = len(windows) > 1 and E.has_any(text, E.TREND_WORDS)
+        compares = len(windows) > 1 and (
+            E.has_any(text, E.TREND_WORDS) or E.has_any(text, E.TREND_QUANTITY)
+        )
         if asks_target:
             plan.kind, plan.intent = "target", "hybrid"
         elif asks_price and plan.product_id:
@@ -274,6 +283,8 @@ class Planner:
             plan.intent, plan.kind = "doc", "doc"
 
         plan.slots["asks_why"] = bool(asks_why or abnormal)
+        plan.slots["asks_top"] = bool(asks_top)
+        plan.slots["asks_bottom"] = bool(asks_bottom)
         plan.slots["about_names"] = E.asks_about_names(text)
         plan.slots["two_part"] = False
         # 什么抓手都没有时（没有指标、时间、门店、商品、支付方式、排名，

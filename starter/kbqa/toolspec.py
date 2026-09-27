@@ -54,6 +54,21 @@ TOOLS = [
         ["start", "end"],
     ),
     _fn(
+        "bottom_products",
+        "区间内卖得最差的商品排行。",
+        {
+            "start": _DATE,
+            "end": _DATE,
+            "store_id": _STORE,
+            "limit": {
+                "type": "integer",
+                "description": "返回条数，默认 10",
+                "maximum": MAX_TOP_PRODUCTS,
+            },
+        },
+        ["start", "end"],
+    ),
+    _fn(
         "by_store",
         "区间内各门店的指标，按净营业额从高到低。",
         {"start": _DATE, "end": _DATE, "product_id": _PRODUCT},
