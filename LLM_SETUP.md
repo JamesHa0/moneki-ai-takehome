@@ -30,6 +30,9 @@ POST {LLM_BASE_URL}/chat/completions
 
 ## 3. 怎么换成你们的
 
+评审的标准接入方式仍然是把配置放进**服务进程环境变量**；本服务不会主动读取 `.env`。
+`starter/.env.example` 只是可选的“抄文件填空”模板，环境变量路线优先。
+
 1. 在启动服务的同一个终端设置：
 
 ```powershell
@@ -58,6 +61,20 @@ live
 ```
 
 环境变量在进程启动时读取，修改后必须重启服务。模型配置与索引无关，不需要重建索引。
+
+### 可选：用 `uv` 显式加载 `.env`
+
+这不是默认启动方式，也不会改变服务只读环境变量的行为。`uv` 会把文件内容注入子进程环境，
+因此 `make run` 仍然不会自动加载 `.env`。
+
+```powershell
+cd starter
+Copy-Item .env.example .env
+# 编辑 .env，填入 LLM_API_KEY
+uv run --env-file .env python -m uvicorn kbqa.server:app --host 127.0.0.1 --port 8000
+```
+
+如果评审已经设置了同名环境变量，应直接使用环境变量路线，不要用 `.env` 覆盖评审配置。
 
 ## 4. 怎么看到发给模型的请求
 
