@@ -13,7 +13,10 @@ from kbqa.planner import Planner
 def _planner() -> Planner:
     return Planner(
         Catalog(
-            stores=[{"store_id": "S02", "store_name": "Makai Poke"}],
+            stores=[
+                {"store_id": "S02", "store_name": "Makai Poke"},
+                {"store_id": "S04", "store_name": "Arigato Sando"},
+            ],
             products=[
                 {
                     "product_id": "P06",
@@ -63,3 +66,54 @@ def test_out_of_period_data_question_still_refuses():
 
     assert plan.intent == "refusal"
     assert plan.kind == "out_of_period"
+
+
+@pytest.mark.parametrize(
+    ("question", "window"),
+    [
+        ("为什么8月19营业额低了", ("2026-08-19", "2026-08-19")),
+        ("为什么8月19日营业额低了？", ("2026-08-19", "2026-08-19")),
+        (
+            "S02 在 8 月 17 日到 19 日为什么一分钱营业额都没有？",
+            ("2026-08-17", "2026-08-19"),
+        ),
+    ],
+)
+def test_why_anomaly_route_is_not_overwritten(question, window):
+    plan = _planner().plan(question)
+
+    assert plan.kind == "anomaly"
+    assert plan.intent == "hybrid"
+    assert plan.needs_data is True
+    assert plan.needs_docs is True
+    assert plan.window == window
+
+
+def test_document_why_question_stays_document():
+    plan = _planner().plan("S04 为什么不卖吞拿鱼三明治了？")
+
+    assert plan.kind == "doc"
+    assert plan.intent == "doc"
+    assert plan.needs_data is False
+
+
+def test_decline_word_with_metric_routes_to_anomaly():
+    plan = _planner().plan("8 月 19 营业额低了")
+
+    assert plan.kind == "anomaly"
+    assert plan.intent == "hybrid"
+    assert plan.window == ("2026-08-19", "2026-08-19")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "8 月营业额比 7 月高了还是低了？",
+        "7 月客单价跟 6 月比，是涨了还是跌了？",
+    ],
+)
+def test_trend_alternative_is_not_an_anomaly(question):
+    plan = _planner().plan(question)
+
+    assert plan.kind == "compare"
+    assert plan.intent == "data"

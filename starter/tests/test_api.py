@@ -92,6 +92,23 @@ def test_chat_trace_id(client):
     assert client.get("/api/trace/%s" % trace_id).status_code == 200
 
 
+def test_anomaly_shorthand_uses_the_requested_day(client):
+    response = client.post(
+        "/api/chat",
+        json={"session_id": "anomaly-shorthand", "question": "为什么8月19营业额低了"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_type"] in ("data", "hybrid")
+    assert any(
+        item.get("tool") == "query_metrics"
+        and item.get("params", {}).get("start") == "2026-08-19"
+        and item.get("params", {}).get("end") == "2026-08-19"
+        for item in body["data_evidence"]
+    )
+
+
 def test_trace_unknown(client):
     assert client.get("/api/trace/nope").status_code == 404
 

@@ -452,3 +452,96 @@ def test_close_out_failure_falls_back_to_template():
     assert answer.answer == "模板回退"
     assert answerer.calls == 1
     assert any(step["step"] == "tool_loop_close_out_failed" for step in trace.steps)
+
+
+def _anomaly_plan() -> Plan:
+    plan = _plan()
+    plan.kind = "anomaly"
+    plan.intent = "hybrid"
+    plan.needs_data = True
+    plan.needs_docs = True
+    plan.window = ("2026-08-19", "2026-08-19")
+    plan.metric = "net_revenue"
+    return plan
+
+
+def test_required_data_falls_back_when_model_only_searches_docs():
+    client = _Client(
+        [
+            _tool_reply("search_kb", {"query": "8 月 19 营业额"}, "call-1"),
+            _text_reply("KB-029《月度纪要》：月度采购清单。[KB-029]"),
+        ]
+    )
+    answerer = _Answerer({"KB-029": "月度采购清单。"})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {
+            "results": [{"doc_id": "KB-029", "text": "月度采购清单。"}]
+        },
+    )
+    trace = Trace(trace_id="t-required-data", question="为什么8月19营业额低了")
+
+    answer = engine.answer(_anomaly_plan(), trace, [])
+
+    assert answer.answer == "模板回退"
+    assert answerer.calls == 1
+    assert any(step["step"] == "plan_data_missing_fallback" for step in trace.steps)
+
+
+def test_required_anomaly_data_rejects_a_wrong_window():
+    wrong = {"start": "2026-08-01", "end": "2026-08-31"}
+    client = _Client(
+        [
+            _tool_reply("query_metrics", wrong, "call-1"),
+            _text_reply("8 月净营业额是 10000.00 元。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {
+            "net_revenue": 10000.0,
+            "refund_amount": 0.0,
+            "orders": 300,
+            "aov": 33.33,
+            "qty": 500,
+        },
+    )
+    trace = Trace(trace_id="t-wrong-window", question="为什么8月19营业额低了")
+
+    answer = engine.answer(_anomaly_plan(), trace, [])
+
+    assert answer.answer == "模板回退"
+    assert answerer.calls == 1
+    assert any(step["step"] == "plan_data_missing_fallback" for step in trace.steps)
+
+
+def test_required_anomaly_data_accepts_the_planned_window():
+    planned = {"start": "2026-08-19", "end": "2026-08-19"}
+    client = _Client(
+        [
+            _tool_reply("query_metrics", planned, "call-1"),
+            _text_reply("8 月 19 日净营业额是 3067.00 元。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {
+            "net_revenue": 3067.0,
+            "refund_amount": 26.0,
+            "orders": 94,
+            "aov": 32.63,
+            "qty": 146,
+        },
+    )
+    trace = Trace(trace_id="t-planned-window", question="为什么8月19营业额低了")
+
+    answer = engine.answer(_anomaly_plan(), trace, [])
+
+    assert answer.answer == "8 月 19 日净营业额是 3067.00 元。"
+    assert answerer.calls == 0
+    assert answer.answer_type == "data"
