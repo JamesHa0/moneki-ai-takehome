@@ -133,7 +133,8 @@ LLM_BASE_URL=http://127.0.0.1:8021/ds-gw
 - `/api/health` 返回 `llm_mode: "mock"`。
 - `/api/metrics/*`、`/api/retrieve` 和知识库检索正常工作。
 - `/api/chat` 进入本地模板回答或返回结构化结果，不会因缺少 Key 返回 HTTP 500。
-- 无 Key 时公开题库读数为 49.00 / 100（降级模式，作为对照）；最终得分见 `EVAL_REPORT.md`。
+- 无 Key / 未配置 Key 时，公开题库读数为 **95.00 / 100**（降级模式，`c47da83`）；
+  配置 Key 后的真实模型读数为 **97.00 / 100**（见第 7 节与 `EVAL_REPORT.md`）。
   仓库根目录的 `report.md` 是 2026-09-24 的起跑线快照（17.00 / 100），不是当前水位。
 
 ## 6. 依赖与安装
@@ -182,9 +183,10 @@ uv run python ../eval/llm_gateway.py preflight \
 - `notes/preflight/preflight_report.md`
 - `notes/preflight/preflight_report.json`
 
-### 真实模型小范围验收
+### 真实模型验收（本机，真实 Key）
 
-使用 DeepSeek `deepseek-flash`，服务经本地代理调用真实官方接口后运行：
+使用 DeepSeek `deepseek-flash`，服务经本地代理调用真实官方接口后运行。
+下面这条是**单类复测**的写法（`--only` 一次只接受一个值，跑多类要去掉该参数）：
 
 ```bash
 python eval/run_eval.py \
@@ -194,23 +196,53 @@ python eval/run_eval.py \
   --out notes/eval-live-doc
 ```
 
-截至 2026-09-26 的结果：
+截至 2026-09-27 的最新结果（`c47da83`，全量 55 题）：
 
 ```text
-doc：16.00 / 16.00
-C01–C08 全部通过
+总分：97.00 / 100        全绿：53 / 55        检查点 461 / 463
 
-完整公开题库：84.00 / 100（48 / 55 题全绿）
+metrics       6 / 6          data         12 / 12
+doc          14 / 16         version       6 / 6
+hybrid       18 / 18         multi_turn    9 / 9
+refusal       8 / 8          safety        9 / 9
+retrieval    14 / 15         health        1 / 1
 ```
 
-这证明真实 Key、模型名、代理、工具调用与 `/api/chat` 链路已经连通。D1-06 修复后，
-C04 的模型请求数从 5 降到 3，C06/C07 不再受示例日期或工具循环影响。
+分阶段的 live 读数（同一份评测器、同一份数据，按运行时的 commit 归属）：
+
+```text
+接入首日（三个 live 缺陷未修）          8.00 / 16（doc）    dc66c37
+模板回退约束 + 挑句排序修复后          10.00 ~ 12.00 / 16  d43cda6 ~ 96577ca
+D1-06 收口 / 日期白名单后              14.00 / 16（六连跑） b288ad9
+D1-09 数字预算 / year 降权 / 剥注入     91.00 / 100         f1f25e2
+异常题路由 + 最好/最差排名后           **97.00 / 100**      c47da83
+```
+
+全量跑法（与上面 `--only doc` 同一条链路，去掉 `--only`）：
+
+```bash
+python eval/run_eval.py \
+  --base-url http://127.0.0.1:8015 \
+  --questions eval/public_questions.jsonl \
+  --out notes/eval-live-full
+```
+
+这证明真实 Key、模型名、代理、工具调用与 `/api/chat` 链路已经完全连通；
+C04 的模型请求数由 5 降到 3，C06/C07 不再受示例日期或工具循环影响。
+剩余 2 项（`R04` 检索排序 1 分、`C02` 挑句 2 分）的逐项归因见 `EVAL_REPORT.md` §五。
+
 
 ## 8. 已知限制
 
 - `.env` 不会自动加载；配置必须进入服务进程环境。
 - 环境变量在启动时读取，修改后必须重启服务。
 - 当前说明只覆盖 OpenAI 兼容 Chat Completions 路线。
+- 真实模型下仍有 2 项未满分，共 3 分：`R04`（检索 top-5 缺 KB-022，1 分）、
+  `C02`（挑句挑到 KB-040 的表格行却没带表头，导致「麸质/大豆/芝麻」未出现，2 分）。
+  此前报告里提到的 `D03`/`D06`/`V01`/`H01`/`H06`/`S01` 与 `C04` 均已修复。
+  逐项归因见 `EVAL_REPORT.md` §五。
+- **同一批题的两次 live 读数有 ±2 的模型波动**（`C07` 在 `doc` 上 14↔16 的往复、
+  `C02` 的 `cite_max` 时过时挂），单次读数不等于长期稳定值。
 - `doc` 已全绿；完整 live 题库仍有 R04、D03、D06、V01、H01、H06、S01 未过。
   D03/D06 是模型额外调用过大的 `top_products` 结果触发证据数字上限；
   V01/S01 是模型额外引入旧版信息或文档干扰数字；H01/H06 是仍缺 hybrid 数字证据。
