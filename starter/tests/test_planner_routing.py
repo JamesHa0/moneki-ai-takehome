@@ -117,3 +117,51 @@ def test_trend_alternative_is_not_an_anomaly(question):
 
     assert plan.kind == "compare"
     assert plan.intent == "data"
+
+
+def test_ranking_question_marks_best_and_worst():
+    plan = _planner().plan("7 月 24 卖得最好的商品是哪个，最差的又是哪个？")
+
+    assert plan.kind == "top_products"
+    assert plan.intent == "data"
+    assert plan.slots["asks_top"] is True
+    assert plan.slots["asks_bottom"] is True
+
+
+@pytest.mark.parametrize(
+    ("question", "asks_top", "asks_bottom"),
+    [
+        ("7 月 24 卖得最好的商品是哪个？", True, False),
+        ("7 月 24 卖得最差的商品是哪个？", False, True),
+    ],
+)
+def test_single_direction_ranking_still_uses_top_products(
+    question, asks_top, asks_bottom
+):
+    plan = _planner().plan(question)
+
+    assert plan.kind == "top_products"
+    assert plan.intent == "data"
+    assert plan.slots["asks_top"] is asks_top
+    assert plan.slots["asks_bottom"] is asks_bottom
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "8 月的净营业额比 7 月少了多少？",
+        "S02 的牛肉poke 销量比上月少了多少？",
+        "7 月的退款金额比 6 月低了多少？",
+    ],
+)
+def test_comparison_quantity_question_is_not_an_anomaly(question):
+    """「比上月少了多少」是在要一个数，不是问「出了什么事」。
+
+    软下降信号（少了/低了）本身不足以判定异常：一旦句子里同时有比较句式和
+    数量问法，它就是纯数据题。判错会让隐藏题库里"换一种问法"的比较题
+    被当成异常题，`answer_type_in: [data]` 直接不成立。
+    """
+    plan = _planner().plan(question)
+
+    assert plan.kind != "anomaly"
+    assert plan.intent == "data"

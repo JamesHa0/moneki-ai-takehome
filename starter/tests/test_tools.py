@@ -210,6 +210,83 @@ def test_top_products_clamps_limit_and_stays_within_evidence_budget(tmp_path):
     assert len(_numbers_in(json.dumps(result, ensure_ascii=False))) <= EVIDENCE_NUMBER_BUDGET
 
 
+def test_bottom_products_orders_ascending_and_clamps_limit(tmp_path):
+    tools = _make_budget_tools(tmp_path)
+    try:
+        result = tools.bottom_products("2026-06-01", "2026-06-30", limit=99)
+    finally:
+        tools.close()
+
+    products = result["products"]
+    assert len(products) == getattr(toolspec, "MAX_TOP_PRODUCTS", 10)
+    assert [item["net_revenue"] for item in products] == sorted(
+        item["net_revenue"] for item in products
+    )
+    assert products[0]["product_id"] == "P01"
+
+
+def test_product_ranking_includes_all_tied_boundary_items(tmp_path):
+    db = tmp_path / "ties.db"
+    con = sqlite3.connect(str(db))
+    try:
+        con.execute(
+            """
+            CREATE TABLE sales_clean (
+                order_id TEXT, date TEXT, store_id TEXT, product_id TEXT,
+                qty INTEGER, amount_cents INTEGER, payment TEXT, is_refund INTEGER
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE products (
+                product_id TEXT PRIMARY KEY, product_name TEXT,
+                product_category TEXT, unit_price REAL
+            )
+            """
+        )
+        con.executemany(
+            "INSERT INTO products VALUES (?,?,?,?)",
+            [
+                ("P%02d" % index, "Product %d" % index, "category", 1.0)
+                for index in range(1, 6)
+            ],
+        )
+        con.executemany(
+            "INSERT INTO sales_clean VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (
+                    "O%02d" % index,
+                    "2026-06-01",
+                    "S01",
+                    "P%02d" % index,
+                    1,
+                    100,
+                    "cash",
+                    0,
+                )
+                for index in range(1, 6)
+            ],
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    tools = DataTools(db)
+    try:
+        result = tools.bottom_products("2026-06-01", "2026-06-01", limit=2)
+    finally:
+        tools.close()
+
+    assert [item["product_id"] for item in result["products"]] == [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+    ]
+
+
 def test_by_store_uses_the_small_evidence_shape(tmp_path):
     tools = _make_budget_tools(tmp_path)
     try:

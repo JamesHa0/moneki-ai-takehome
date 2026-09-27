@@ -109,6 +109,60 @@ def test_anomaly_shorthand_uses_the_requested_day(client):
     )
 
 
+def test_ranking_question_returns_best_and_worst(client):
+    response = client.post(
+        "/api/chat",
+        json={
+            "session_id": "ranking-extremes",
+            "question": "7月24卖得最好的商品是哪个，最差的又是哪个",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_type"] == "data"
+    assert "卖得最好" in body["answer"]
+    assert "卖得最差" in body["answer"]
+    assert {item.get("tool") for item in body["data_evidence"]} == {
+        "top_products",
+        "bottom_products",
+    }
+
+
+def test_ranking_question_best_only_uses_only_top_products(client):
+    response = client.post(
+        "/api/chat",
+        json={
+            "session_id": "ranking-best",
+            "question": "7月24卖得最好的商品是哪个",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_type"] == "data"
+    assert "卖得最好" in body["answer"]
+    assert "卖得最差" not in body["answer"]
+    assert {item.get("tool") for item in body["data_evidence"]} == {"top_products"}
+
+
+def test_ranking_question_worst_only_uses_only_bottom_products(client):
+    response = client.post(
+        "/api/chat",
+        json={
+            "session_id": "ranking-worst",
+            "question": "7月24卖得最差的商品是哪个",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer_type"] == "data"
+    assert "卖得最差" in body["answer"]
+    assert "卖得最好" not in body["answer"]
+    assert {item.get("tool") for item in body["data_evidence"]} == {"bottom_products"}
+
+
 def test_trace_unknown(client):
     assert client.get("/api/trace/nope").status_code == 404
 

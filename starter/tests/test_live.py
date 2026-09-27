@@ -545,3 +545,117 @@ def test_required_anomaly_data_accepts_the_planned_window():
     assert answer.answer == "8 月 19 日净营业额是 3067.00 元。"
     assert answerer.calls == 0
     assert answer.answer_type == "data"
+
+
+def _ranking_plan() -> Plan:
+    plan = _plan()
+    plan.kind = "top_products"
+    plan.intent = "data"
+    plan.needs_data = True
+    plan.window = ("2026-07-24", "2026-07-24")
+    plan.metric = "net_revenue"
+    plan.slots["asks_top"] = True
+    plan.slots["asks_bottom"] = True
+    return plan
+
+
+def test_required_ranking_rejects_metrics_only():
+    params = {"start": "2026-07-24", "end": "2026-07-24"}
+    client = _Client(
+        [
+            _tool_reply("query_metrics", params, "call-1"),
+            _text_reply("7 月 24 日净营业额是 2053.00 元。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {
+            "net_revenue": 2053.0,
+            "refund_amount": 0.0,
+            "orders": 52,
+            "aov": 39.48,
+            "qty": 77,
+        },
+    )
+    trace = Trace(trace_id="t-ranking-wrong-tool", question="7月24卖得最好的商品是哪个")
+
+    answer = engine.answer(_ranking_plan(), trace, [])
+
+    assert answer.answer == "模板回退"
+    assert answerer.calls == 1
+    assert any(step["step"] == "plan_data_missing_fallback" for step in trace.steps)
+
+
+def test_required_ranking_accepts_top_and_bottom_evidence():
+    top = {"start": "2026-07-24", "end": "2026-07-24", "limit": 10}
+    bottom = {"start": "2026-07-24", "end": "2026-07-24", "limit": 10}
+    client = _Client(
+        [
+            _tool_reply("top_products", top, "call-1"),
+            _tool_reply("bottom_products", bottom, "call-2"),
+            _text_reply("最好的是牛肉poke，最差的是味增汤。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {"products": []},
+    )
+    trace = Trace(trace_id="t-ranking-tools", question="7月24卖得最好的商品是哪个")
+
+    answer = engine.answer(_ranking_plan(), trace, [])
+
+    assert answer.answer == "最好的是牛肉poke，最差的是味增汤。"
+    assert answerer.calls == 0
+    assert answer.answer_type == "data"
+
+
+def test_required_bidirectional_ranking_rejects_missing_bottom_evidence():
+    top = {"start": "2026-07-24", "end": "2026-07-24", "limit": 10}
+    client = _Client(
+        [
+            _tool_reply("top_products", top, "call-1"),
+            _text_reply("7 月 24 日最好的是牛肉poke。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {"products": []},
+    )
+    trace = Trace(trace_id="t-ranking-missing-bottom", question="7月24卖得最好和最差的是什么")
+
+    answer = engine.answer(_ranking_plan(), trace, [])
+
+    assert answer.answer == "模板回退"
+    assert answerer.calls == 1
+    assert any(step["step"] == "plan_data_missing_fallback" for step in trace.steps)
+
+
+def test_best_only_ranking_accepts_top_evidence():
+    plan = _ranking_plan()
+    plan.slots["asks_bottom"] = False
+    top = {"start": "2026-07-24", "end": "2026-07-24", "limit": 10}
+    client = _Client(
+        [
+            _tool_reply("top_products", top, "call-1"),
+            _text_reply("最好的是牛肉poke。"),
+        ]
+    )
+    answerer = _Answerer({})
+    engine = _engine(
+        client,
+        answerer,
+        lambda name, args, year=None: {"products": []},
+    )
+    trace = Trace(trace_id="t-ranking-best-only", question="7月24卖得最好的是什么")
+
+    answer = engine.answer(plan, trace, [])
+
+    assert answer.answer == "最好的是牛肉poke。"
+    assert answerer.calls == 0
+    assert answer.answer_type == "data"
