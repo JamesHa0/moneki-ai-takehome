@@ -129,10 +129,16 @@ LLM_BASE_URL=http://127.0.0.1:8021/ds-gw
 
 ## 5. 没有 Key 时会怎样
 
-- 服务可以正常启动。
-- `/api/health` 返回 `llm_mode: "mock"`。
-- `/api/metrics/*`、`/api/retrieve` 和知识库检索正常工作。
-- `/api/chat` 进入本地模板回答或返回结构化结果，不会因缺少 Key 返回 HTTP 500。
+服务照常启动，四个接口的返回：
+
+| 接口 | 无 Key（`llm_mode=mock`）时 |
+|---|---|
+| `/api/health` | HTTP 200，`llm_mode: "mock"`，其余健康字段照常 |
+| `/api/metrics/summary`、`/api/metrics/daily` | HTTP 200，正常指标数据（不经过模型） |
+| `/api/retrieve` | HTTP 200，正常检索结果（不经过模型） |
+| `/api/chat` | HTTP 200，`answer_type` 为 `data` / `doc` / `hybrid` / `refusal` 之一，正文由本地模板从工具结果渲染，**不会因缺 Key 返回 HTTP 500** |
+
+降级策略：不使用任何模型能力，改为确定性模板回答；数字与引用同样来自工具与检索结果。
 - 无 Key / 未配置 Key 时，公开题库读数为 **95.00 / 100**（降级模式，`c47da83`）；
   配置 Key 后的真实模型读数为 **97.00 / 100**（见第 7 节与 `EVAL_REPORT.md`）。
   仓库根目录的 `report.md` 是 2026-09-24 的起跑线快照（17.00 / 100），不是当前水位。
@@ -143,6 +149,9 @@ LLM_BASE_URL=http://127.0.0.1:8021/ds-gw
 - 已有依赖：`fastapi`、`uvicorn`、`httpx`、`pytest`。
 - 不需要 `python-dotenv`。
 - 真实模型调用需要网络，单次 `/api/chat` 通常数秒到数十秒。
+- **首次启动耗时**：本机实测 **约 3 秒**（启动到 `/api/health` 可返回，Windows 11 + Python 3.12，
+  无需下载模型文件、无需重建索引）。首次运行 `make rebuild` 会生成 `clean.db` 与检索索引，
+  耗时取决于数据量，本机约十几秒。
 
 ## 7. 自测结果
 

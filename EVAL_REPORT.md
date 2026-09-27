@@ -29,6 +29,11 @@ starter\.venv\Scripts\python.exe eval\run_eval.py ^
     
   （**本报告不含 Key**），`/api/health` 的 `llm_mode` 变成 `live` 再跑，命令不变。
 - 环境一致：Windows 11 + Python 3.12（`starter/.venv`）+ 随包数据（未改动）。
+- **live 读数使用的模型与关键配置**（作业要求每次得分交代，Key 不写入本报告）：
+  DeepSeek `deepseek-flash`；协议 OpenAI 兼容 `POST {LLM_BASE_URL}/chat/completions`；
+  服务经 `eval/llm_gateway.py proxy` 调用（代理只记 Authorization 长度）；
+  思考模式保持默认开启（理由见 README §三）；`max_tokens` 不设置、`LLM_TIMEOUT=120s`、
+  `CHAT_BUDGET=150s`；mock 与 live 两次读数用的是**同一份代码、同一份数据**，仅环境变量不同。
 - **可比性指纹**（三条不全同的两次跑不可直接比）：`health.llm_mode`、
     
   `health.kb_chunks` + 索引缓存键（`starter/.cache/index.json` 的 `key` 字段）、`--only` 为空。
