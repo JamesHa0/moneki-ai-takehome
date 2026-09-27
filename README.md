@@ -87,8 +87,8 @@ flowchart TB
   end
 
   subgraph QA["回归闭环"]
-    EV["eval/run_eval.py 公开题库 55 题<br/>mock 89.00 · live 91.00"]
-    CI["Actions：rebuild → pytest → 全量评测<br/>低于 89.00 即红"]
+    EV["eval/run_eval.py 公开题库 55 题<br/>mock 95.00 · live 97.00"]
+    CI["Actions：rebuild → pytest → 全量评测<br/>低于 89.00 即红（防倒退下限）"]
   end
 
   LLM["DeepSeek deepseek-flash<br/>OpenAI 兼容协议，三个环境变量切换"]
@@ -124,7 +124,8 @@ flowchart TB
   数据库连接层只读（②）、检索命中时剥离文档里的注入句（③）——纵深防御，
   任何一层单独被绕过还有下一层；
 - **右边是回归闭环**：公开题库 + 自有题库的分数就是回归红线，CI 在每次 push 时重跑，
-  低于 89.00 直接失败。
+  低于 **89.00** 直接失败——阈值故意取在**当前水位（mock 95.00）之下**，它是"不许倒退"的
+  下限而不是成绩本身，避免 runner 环境的细微差异把交付时的 CI 判红。
 
 下面两个 ASCII 图是同一架构的细节视角（离线重建 / 在线请求）。
 
@@ -293,8 +294,19 @@ KB-001 §2.2 字面列出的三种格式是 `YYYY-MM-DD`、`YYYY/M/D`、`DD-MM-Y
 | 部分 | 状态 |
 |---|---|
 | 清洗与指标口径（KB-001 v3） | 已完成 —— `valid_sales_rows = 18290`，六条剔除计数 8 / 150 / 30 / 10 / 40 / 100 |
-| 检索（分词 / 文档格式 / 索引缓存 / top-k / 引用一致性） | 进行中 |
-| 混合问答 `/api/chat` | 未开始 |
+| 检索（分词 / 文档格式 / 索引缓存 / top-k / 引用一致性） | 已完成 —— 公开题库检索 14 / 15（剩 `R04`：top-5 缺 KB-022） |
+| 混合问答 `/api/chat` | 已完成 —— live 全量 **97.00 / 100**（53 / 55 题全绿），剩 `R04` 1 分、`C02` 2 分 |
+| 安全判据（三个） | 已完成 —— `planner` 前置拒答 / 只读连接 `mode=ro` + 单条 SELECT 守卫 / 检索层剥离文档注入句 |
 | 前端看板与 trace 面板 | 已完成 —— `web/`（Vue 3 + Element Plus + ECharts），产物 `web/dist` 已提交，FastAPI 同源托管 |
+| 第四关：可调试性与回归 | 已完成 —— trace 面板展示命中片段/分数/被过滤原因/最终提示词/每步耗时；自有题库 `eval/extra_questions.jsonl`（8 题，20.00 / 20.00）；CI 见 `.github/workflows/ci.yml` |
 
-评测得分与前后对比见 [`EVAL_REPORT.md`](EVAL_REPORT.md)；缺陷定位过程见 [`DEBUG_LOG.md`](DEBUG_LOG.md)。
+**当前读数**（同一份代码 `c47da83`、同一份数据，只有环境变量不同）：
+
+| 模式 | 公开题库 | 说明 |
+|---|---|---|
+| mock（无 Key，降级） | **95.00 / 100**（全绿 52 / 55） | 本机可复现，CI 每次 push 重跑 |
+| live（真实 Key，`deepseek-flash`） | **97.00 / 100**（全绿 53 / 55，检查点 461 / 463） | 真实模型行为，逐项归因见 `EVAL_REPORT.md` §五 |
+
+单测 `152 passed`。两份读数的来龙去脉与逐检查点对比见 [`EVAL_REPORT.md`](EVAL_REPORT.md)，
+缺陷定位过程见 [`DEBUG_LOG.md`](DEBUG_LOG.md)，演示见 [`DEMO.md`](DEMO.md)，
+AI 使用与分工见 [`AI_USAGE.md`](AI_USAGE.md)，模型接入见 [`LLM_SETUP.md`](LLM_SETUP.md)。
